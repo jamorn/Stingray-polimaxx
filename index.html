@@ -2,17 +2,28 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stingray 3D - Polimaxx </title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Stingray 3D - Universal Controls</title>
     <style>
-        body { margin: 0; background: #000a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        body { 
+            margin: 0; 
+            background: #000a1a; 
+            overflow: hidden; 
+            font-family: 'Segoe UI', sans-serif; 
+            touch-action: none; /* ป้องกัน browser gesture แทรกแซงการหมุน */
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        canvas { display: block; outline: none; }
         .lil-gui { 
             --background-color: rgba(0, 10, 26, 0.9);
             --widget-color: #f37021;
-            --focus-color: #4fc3f7;
-            --number-color: #4fc3f7;
-            --string-color: #ffffff;
-            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+        }
+        /* ปรับแต่ง GUI ให้เหมาะกับนิ้วสัมผัสบนมือถือ */
+        @media (max-width: 768px) {
+            .lil-gui { width: 220px; }
+            .lil-gui .name { font-size: 11px; }
         }
     </style>
 </head>
@@ -27,9 +38,12 @@
         let tailSegments = []; 
         let tailGroup = new THREE.Group();
         
-        let isDragging = false;
+        // State สำหรับการควบคุม
+        let isPointerDown = false;
         let rotation = { x: 0.6, y: -0.8 }; 
-        let zoom = 5.5; 
+        let zoom = window.innerWidth < 768 ? 8 : 5.5; // Auto detect: มือถือเริ่มที่ระยะไกลกว่าเล็กน้อย
+        let pointerPos = { x: 0, y: 0 };
+        let lastPinchDist = 0; // สำหรับ Pinch Zoom บนมือถือ
 
         let currentTime = 0;
         let lastTimestamp = 0;
@@ -40,89 +54,63 @@
             eyeHover: 0.23,
             eyeX: 0.31,
             eyeY: 1.53,
-            bodyDepth: 0.25,
+            bodyDepth: 0.25, 
             wingTaper: 0.85, 
-            tailCount: 20,
+            tailCount: 20,   
             isPaused: false,
             baseColor: '#ffffff',
+            eyeColor: '#ed0707', 
+            tailColor: '#0e3a66', 
             wireframe: false
         };
-
-        // ปรับปรุง Texture ให้มีความคมชัดสูง (2048px) และมีแถบสีสำหรับหาง
-        function createPolimaxxTexture(color = '#ffffff') {
-            const canvas = document.createElement('canvas');
-            canvas.width = 2048; canvas.height = 1024;
-            const ctx = canvas.getContext('2d');
-            
-            // พื้นหลัง
-            ctx.fillStyle = color; 
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // วาดแถบสีที่ขอบล่างสุด (เพื่อให้ส่วนหาง/ขอบ ดึงไปใช้เป็นลาย)
-            ctx.fillStyle = '#f37021';
-            ctx.fillRect(0, 0, 2048, 40); 
-            ctx.fillStyle = '#0e3a66';
-            ctx.fillRect(0, 1000, 2048, 24);
-
-            const drawLogoSet = (offsetX, isMirror = false) => {
-                ctx.save();
-                ctx.translate(offsetX + 512, 512);
-                if (isMirror) ctx.scale(-1, 1);
-                
-                ctx.textAlign = 'center'; 
-                ctx.textBaseline = 'middle';
-
-                // ใช้สี Navy Blue และ Orange ตามแบรนด์
-                ctx.fillStyle = '#0e3a66'; 
-                ctx.font = 'bold 42px Arial'; 
-                ctx.fillText('POLIMAXX', 0, -140);
-
-                ctx.fillStyle = '#f37021'; 
-                ctx.font = '900 210px Arial'; 
-                ctx.fillText('PP', 0, -10);
-
-                ctx.fillStyle = '#0e3a66';
-                ctx.font = 'bold 36px Arial'; 
-                ctx.fillText('POLYETHYLENE', 0, 100);
-
-                ctx.fillStyle = '#666666';
-                ctx.font = 'bold 30px Arial'; 
-                ctx.fillText('NET WEIGHT 25 KG', 0, 180);
-                
-                ctx.restore();
-            };
-
-            drawLogoSet(0, false);  
-            drawLogoSet(1024, true); 
-            
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.anisotropy = 16;
-            return tex;
-        }
 
         function init() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x000a1a);
             camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
             
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // ประหยัดแบตมือถือโดยจำกัด pixel ratio
             document.body.appendChild(renderer.domElement);
             
-            const ambient = new THREE.AmbientLight(0xffffff, 1.0); 
+            const ambient = new THREE.AmbientLight(0xffffff, 1.2); 
             scene.add(ambient);
-            const sun = new THREE.DirectionalLight(0xffffff, 0.4);
+            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
             sun.position.set(5, 10, 7);
             scene.add(sun);
 
             createStingray();
             updateCameraPosition();
-            setupControls();
+            setupInteractions();
             setupGUI();
 
             window.addEventListener('resize', onResize);
             requestAnimationFrame(animate);
+        }
+
+        // --- ระบบ Texture และโมเดล (เหมือนเดิม) ---
+        function createPolimaxxTexture(color = '#ffffff') {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2048; canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#f37021'; ctx.fillRect(0, 0, 2048, 60); 
+            ctx.fillStyle = '#0e3a66'; ctx.fillRect(0, 964, 2048, 60);
+            const drawLogoSet = (offsetX, isMirror = false) => {
+                ctx.save();
+                ctx.translate(offsetX + 512, 512);
+                if (isMirror) ctx.scale(-1, 1);
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 42px Arial'; ctx.fillText('POLIMAXX', 0, -140);
+                ctx.fillStyle = '#f37021'; ctx.font = '900 210px Arial'; ctx.fillText('PP', 0, -10);
+                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 36px Arial'; ctx.fillText('POLYETHYLENE', 0, 100);
+                ctx.fillStyle = '#666666'; ctx.font = 'bold 30px Arial'; ctx.fillText('NET WEIGHT 25 KG', 0, 180);
+                ctx.restore();
+            };
+            drawLogoSet(0, false); drawLogoSet(1024, true); 
+            return new THREE.CanvasTexture(canvas);
         }
 
         function createStingray() {
@@ -133,61 +121,26 @@
             shape.bezierCurveTo(-1.4, -1.6, -2.7, -0.8, -2.7, 0); 
             shape.bezierCurveTo(-2.7, 0.8, -1.7, 1.6, 0, 1.8);
 
-            const extrudeSettings = { 
-                depth: config.bodyDepth, 
-                bevelEnabled: true, 
-                bevelThickness: 0.1, 
-                bevelSize: 0.2, 
-                bevelSegments: 15 
-            };
-            
+            const extrudeSettings = { depth: config.bodyDepth, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.25, bevelSegments: 15 };
             const geometry = new THREE.ExtrudeBufferGeometry(shape, extrudeSettings);
             const pos = geometry.attributes.position;
             const uvs = geometry.attributes.uv;
-            
             for (let i = 0; i < pos.count; i++) {
-                const x = pos.getX(i); 
-                const y = pos.getY(i); 
-                const pz = pos.getZ(i);
-
-                // ตรวจสอบว่าเป็นหน้าบน หน้าล่าง หรือขอบ (Bevel)
-                const isTopSurface = (pz >= config.bodyDepth + 0.08);
-                const isBottomSurface = (pz <= -0.08);
-
-                if (isTopSurface) {
-                    let u = (x / 5.4 * 0.45) + 0.25; 
-                    let v = (y / 3.6 * 0.45) + 0.5;
-                    uvs.setXY(i, u, v);
-                } else if (isBottomSurface) {
-                    let u = (x / 5.4 * 0.45) + 0.75; 
-                    let v = (y / 3.6 * 0.45) + 0.5;
-                    uvs.setXY(i, u, v);
-                } else {
-                    // ส่วนขอบและหาง: ให้ดึงสีจากแถบส้ม/น้ำเงินที่วาดไว้ขอบ Texture
-                    // นี่คือจุดที่ทำให้หางมี "Artwork" หรือสีสันตามต้นฉบับ
-                    uvs.setXY(i, 0.5, 0.02); 
-                }
+                const x = pos.getX(i), y = pos.getY(i), pz = pos.getZ(i);
+                if (pz >= config.bodyDepth + 0.1) uvs.setXY(i, (x / 5.4 * 0.45) + 0.25, (y / 3.6 * 0.45) + 0.5);
+                else if (pz <= -0.1) uvs.setXY(i, (x / 5.4 * 0.45) + 0.75, (y / 3.6 * 0.45) + 0.5);
+                else uvs.setXY(i, 0.5, (pz > config.bodyDepth / 2) ? 0.03 : 0.97);
             }
-            
             initialPositions = new Float32Array(pos.array);
-            const material = new THREE.MeshStandardMaterial({ 
-                map: createPolimaxxTexture(config.baseColor),
-                roughness: 0.4, 
-                metalness: 0.0,
-                wireframe: config.wireframe
-            });
-
+            const material = new THREE.MeshStandardMaterial({ map: createPolimaxxTexture(config.baseColor), roughness: 0.4, metalness: 0.1, wireframe: config.wireframe });
             stingrayMesh = new THREE.Mesh(geometry, material);
             stingrayMesh.rotation.x = -Math.PI / 2;
             scene.add(stingrayMesh);
 
-            const eyeGeo = new THREE.SphereBufferGeometry(0.1, 32, 32);
-            const eyeMat = new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 100 });
-            eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-            eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-            stingrayMesh.add(eyeL);
-            stingrayMesh.add(eyeR);
-
+            const eyeGeo = new THREE.SphereBufferGeometry(0.1, 16, 16);
+            const eyeMat = new THREE.MeshPhongMaterial({ color: config.eyeColor, shininess: 80 });
+            eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+            stingrayMesh.add(eyeL); stingrayMesh.add(eyeR);
             stingrayMesh.add(tailGroup);
             rebuildTail();
         }
@@ -195,37 +148,16 @@
         function rebuildTail() {
             while(tailGroup.children.length > 0) tailGroup.remove(tailGroup.children[0]);
             tailSegments = [];
-            
-            // ใช้ Canvas เดิมเพื่อให้ส่วนประกอบของหางดึงลายสีเดียวกันมาใช้
-            const tailMaterial = new THREE.MeshStandardMaterial({ 
-                map: stingrayMesh.material.map, 
-                wireframe: config.wireframe 
-            });
-
-            let lastSegment = null;
-            const segmentLength = 0.2;
-
+            const tailMaterial = new THREE.MeshStandardMaterial({ color: config.tailColor, wireframe: config.wireframe });
+            let lastSegment = null; const segmentLength = 0.2;
             for (let i = 0; i < config.tailCount; i++) {
                 const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
                 const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, segmentLength, 8);
                 segGeo.translate(0, -segmentLength / 2, 0); 
-                
-                // ปรับ UV ของหางแต่ละปล้องให้ดึงสีจากขอบ Artwork
-                const tailUvs = segGeo.attributes.uv;
-                for(let j=0; j<tailUvs.count; j++) {
-                    tailUvs.setXY(j, 0.5, 0.02); // ดึงสีส้ม/น้ำเงินจากขอบ
-                }
-
                 const segment = new THREE.Mesh(segGeo, tailMaterial);
-                if (i === 0) {
-                    segment.position.set(0, -1.8, 0.12);
-                    tailGroup.add(segment);
-                } else {
-                    segment.position.set(0, -segmentLength, 0);
-                    lastSegment.add(segment);
-                }
-                tailSegments.push(segment);
-                lastSegment = segment;
+                if (i === 0) { segment.position.set(0, -1.8, 0.12); tailGroup.add(segment); }
+                else { segment.position.set(0, -segmentLength, 0); lastSegment.add(segment); }
+                tailSegments.push(segment); lastSegment = segment;
             }
         }
 
@@ -237,91 +169,58 @@
             return Math.sin(time + wave) * 0.3 * intensity * config.flapStrength;
         }
 
-        function animate(timestamp) {
-            requestAnimationFrame(animate);
-            if (!lastTimestamp) lastTimestamp = timestamp;
-            const delta = timestamp - lastTimestamp;
-            lastTimestamp = timestamp;
+        // --- ระบบควบคุมระดับสูง (Advanced Controls) ---
+        function setupInteractions() {
+            const el = renderer.domElement;
 
-            if (!config.isPaused) {
-                currentTime += delta * 0.003 * config.flapSpeed;
-            }
+            // Pointer Events รองรับทั้ง Mouse และ Touch
+            el.addEventListener('pointerdown', (e) => {
+                isPointerDown = true;
+                pointerPos = { x: e.clientX, y: e.clientY };
+                el.setPointerCapture(e.pointerId);
+            });
 
-            if (stingrayMesh) {
-                const posAttr = stingrayMesh.geometry.attributes.position;
-                for (let i = 0; i < posAttr.count; i++) {
-                    const x = initialPositions[i * 3];
-                    const y = initialPositions[i * 3 + 1];
-                    const z = initialPositions[i * 3 + 2];
-                    
-                    const distFromCenter = Math.abs(x);
-                    const coreWidth = 0.4;
-                    let taperScale = 1.0;
-                    
-                    if (distFromCenter > coreWidth) {
-                        const normalizedDist = (distFromCenter - coreWidth) / (2.7 - coreWidth);
-                        taperScale = 1.0 - (Math.pow(normalizedDist, 1.5) * config.wingTaper);
-                    }
-
-                    const waveHeight = getWaveHeight(x, y, currentTime);
-                    posAttr.setZ(i, (z * taperScale) + waveHeight);
-                }
-                posAttr.needsUpdate = true;
+            window.addEventListener('pointermove', (e) => {
+                if (!isPointerDown) return;
                 
-                const surfaceBaseZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
-                eyeL.position.set(-config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime));
-                eyeR.position.set(config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime));
-
-                tailSegments.forEach((seg, idx) => {
-                    const delay = idx * 0.15;
-                    seg.rotation.z = Math.sin(currentTime * 0.8 - delay) * 0.15;
-                    seg.rotation.x = Math.cos(currentTime * 0.8 - delay) * 0.1;
-                });
-            }
-            renderer.render(scene, camera);
-        }
-
-        function setupGUI() {
-            const gui = new GUI({ title: 'POLIMAXX STINGRAY CONTROLS' });
-            
-            const viewFolder = gui.addFolder('Visualization');
-            viewFolder.add(config, 'isPaused').name('Pause Animation');
-            viewFolder.add(config, 'wireframe').name('Show Wireframe').onChange((val) => {
-                stingrayMesh.material.wireframe = val;
-                tailSegments.forEach(seg => seg.material.wireframe = val);
-            });
-            viewFolder.addColor(config, 'baseColor').name('Body Color').onChange((val) => {
-                stingrayMesh.material.map = createPolimaxxTexture(val);
-                tailSegments.forEach(seg => seg.material.map = stingrayMesh.material.map);
+                // คำนวณการหมุน (Rotate)
+                const dx = e.clientX - pointerPos.x;
+                const dy = e.clientY - pointerPos.y;
+                
+                rotation.y -= dx * 0.007;
+                rotation.x -= dy * 0.007;
+                rotation.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, rotation.x));
+                
+                pointerPos = { x: e.clientX, y: e.clientY };
+                updateCameraPosition();
             });
 
-            const wingFolder = gui.addFolder('Wing Properties');
-            wingFolder.add(config, 'wingTaper', 0, 1, 0.01).name('Wing Edge Taper');
-            wingFolder.add(config, 'bodyDepth', 0.1, 0.5, 0.01).name('Main Thickness');
-
-            const tailFolder = gui.addFolder('Tail Properties');
-            tailFolder.add(config, 'tailCount', 10, 80, 1).name('Tail Length').onChange(rebuildTail);
-
-            const animFolder = gui.addFolder('Movement Settings');
-            animFolder.add(config, 'flapSpeed', 0, 2, 0.01).name('Flap Speed');
-            animFolder.add(config, 'flapStrength', 0, 1.5, 0.01).name('Flap Strength');
-        }
-
-        function setupControls() {
-            window.addEventListener('mousedown', () => isDragging = true);
-            window.addEventListener('mouseup', () => isDragging = false);
-            window.addEventListener('mousemove', (e) => {
-                if(isDragging) {
-                    rotation.y -= e.movementX * 0.007;
-                    rotation.x -= e.movementY * 0.007;
-                    rotation.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, rotation.x));
-                    updateCameraPosition();
-                }
+            window.addEventListener('pointerup', (e) => {
+                isPointerDown = false;
+                lastPinchDist = 0;
             });
-            window.addEventListener('wheel', (e) => {
-                zoom = Math.max(3.5, Math.min(12, zoom + e.deltaY * 0.005));
+
+            // Mouse Wheel Zoom
+            el.addEventListener('wheel', (e) => {
+                zoom = Math.max(3.5, Math.min(15, zoom + e.deltaY * 0.005));
                 updateCameraPosition();
             }, { passive: true });
+
+            // Touch Pinch Zoom (พิเศษสำหรับมือถือ)
+            el.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 2) {
+                    const dist = Math.hypot(
+                        e.touches[0].pageX - e.touches[1].pageX,
+                        e.touches[0].pageY - e.touches[1].pageY
+                    );
+                    if (lastPinchDist > 0) {
+                        const diff = (lastPinchDist - dist) * 0.02;
+                        zoom = Math.max(3.5, Math.min(15, zoom + diff));
+                        updateCameraPosition();
+                    }
+                    lastPinchDist = dist;
+                }
+            }, { passive: false });
         }
 
         function updateCameraPosition() {
@@ -337,6 +236,54 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            // ปรับ Zoom อัตโนมัติเมื่อหมุนหน้าจอ (Mobile Auto-detect)
+            if (window.innerWidth < 768 && zoom < 6) zoom = 8;
+            updateCameraPosition();
+        }
+
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const delta = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+            if (!config.isPaused) currentTime += delta * 0.003 * config.flapSpeed;
+
+            if (stingrayMesh) {
+                const posAttr = stingrayMesh.geometry.attributes.position;
+                for (let i = 0; i < posAttr.count; i++) {
+                    const x = initialPositions[i * 3], y = initialPositions[i * 3 + 1], z = initialPositions[i * 3 + 2];
+                    const distFromCenter = Math.abs(x);
+                    const coreWidth = 0.4;
+                    let taperScale = (distFromCenter > coreWidth) ? 1.0 - (Math.pow((distFromCenter - coreWidth) / (2.7 - coreWidth), 1.5) * config.wingTaper) : 1.0;
+                    posAttr.setZ(i, (z * taperScale) + getWaveHeight(x, y, currentTime));
+                }
+                posAttr.needsUpdate = true;
+                const surfaceBaseZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
+                eyeL.position.set(-config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime));
+                eyeR.position.set(config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime));
+                tailSegments.forEach((seg, idx) => {
+                    const delay = idx * 0.15;
+                    seg.rotation.z = Math.sin(currentTime * 0.8 - delay) * 0.15;
+                    seg.rotation.x = Math.cos(currentTime * 0.8 - delay) * 0.1;
+                });
+            }
+            renderer.render(scene, camera);
+        }
+
+        function setupGUI() {
+            const gui = new GUI({ title: 'STINGRAY CONFIG' });
+            const viewFolder = gui.addFolder('Display (การแสดงผล)');
+            viewFolder.addColor(config, 'eyeColor').name('Eye Color (สีตา)').onChange(v => { eyeL.material.color.set(v); eyeR.material.color.set(v); });
+            viewFolder.addColor(config, 'baseColor').name('Body Color (สีตัว)').onChange(v => stingrayMesh.material.map = createPolimaxxTexture(v));
+            viewFolder.addColor(config, 'tailColor').name('Tail Color (สีหาง)').onChange(v => tailSegments.forEach(s => s.material.color.set(v)));
+            
+            const animFolder = gui.addFolder('Animation (แอนิเมชัน)');
+            animFolder.add(config, 'flapSpeed', 0, 2).name('Speed (ความเร็ว)');
+            animFolder.add(config, 'flapStrength', 0, 1.5).name('Strength (แรงกระพือ)');
+            animFolder.add(config, 'isPaused').name('Pause (หยุดบิน)');
+
+            viewFolder.open();
+            animFolder.open();
         }
 
         init();
