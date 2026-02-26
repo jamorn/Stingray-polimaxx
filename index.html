@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stingray 3D - Pro Edge Control</title>
+    <style>
+        body { margin: 0; background: #000a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        #ui-container { display: none; }
+        
+        .lil-gui { 
+            --background-color: rgba(0, 10, 26, 0.9);
+            --widget-color: #f37021;
+            --focus-color: #4fc3f7;
+            --number-color: #4fc3f7;
+            --string-color: #ffffff;
+            font-family: 'Segoe UI', sans-serif;
+        }
+    </style>
+</head>
+<body>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.esm.min.js';
+
+        let scene, camera, renderer, stingrayMesh, initialPositions;
+        let eyeL, eyeR;
+        let tailSegments = []; 
+        let tailGroup = new THREE.Group();
+        
+        let isDragging = false;
+        let rotation = { x: 0.6, y: -0.8 }; 
+        let zoom = 5.5; 
+
+        // ตัวแปรเก็บเวลาสำหรับการเล่น/หยุด
+        let currentTime = 0;
+        let lastTimestamp = 0;
+
+        const config = {
+            flapStrength: 0.65,
+            flapSpeed: 0.75,
+            eyeHover: 0.23,
+            eyeX: 0.31,
+            eyeY: 1.53,
+            bodyDepth: 0.25,
+            wingTaper: 0.85, 
+            tailCount: 20,
+            // เพิ่มการตั้งค่าใหม่
+            isPaused: false,
+            baseColor: '#ffffff',
+            wireframe: false
+        };
+
+        function createPolimaxxTexture(color = '#ffffff') {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2048; canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const drawLogoSet = (offsetX, isMirror = false) => {
+                ctx.save();
+                ctx.translate(offsetX + 512, 512);
+                if (isMirror) ctx.scale(-1, 1);
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 36px Arial'; ctx.fillText('POLIMAXX', 0, -140);
+                ctx.fillStyle = '#f37021'; ctx.font = '900 180px Arial'; ctx.fillText('PP', 0, -10);
+                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 32px Arial'; ctx.fillText('POLYETHYLENE', 0, 100);
+                ctx.fillStyle = '#666666'; ctx.font = 'bold 28px Arial'; ctx.fillText('NET WEIGHT 25 KG', 0, 180);
+                ctx.restore();
+            };
+            drawLogoSet(0, false); 
+            drawLogoSet(1024, true); 
+            ctx.fillStyle = color; ctx.fillRect(1020, 0, 8, 1024); 
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.anisotropy = 16;
+            return tex;
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000a1a);
+            camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.body.appendChild(renderer.domElement);
+            
+            const ambient = new THREE.AmbientLight(0xffffff, 0.9);
+            scene.add(ambient);
+            const sun = new THREE.DirectionalLight(0xffffff, 0.3);
+            sun.position.set(5, 10, 7);
+            scene.add(sun);
+
+            createStingray();
+            updateCameraPosition();
+            setupControls();
+            setupGUI();
+
+            window.addEventListener('resize', onResize);
+            requestAnimationFrame(animate);
+        }
+
+        function createStingray() {
+            const shape = new THREE.Shape();
+            shape.moveTo(0, 1.8); 
+            shape.bezierCurveTo(1.7, 1.6, 2.7, 0.8, 2.7, 0); 
+            shape.bezierCurveTo(2.7, -0.8, 1.4, -1.6, 0, -1.8); 
+            shape.bezierCurveTo(-1.4, -1.6, -2.7, -0.8, -2.7, 0); 
+            shape.bezierCurveTo(-2.7, 0.8, -1.7, 1.6, 0, 1.8);
+
+            const extrudeSettings = { 
+                depth: config.bodyDepth, 
+                bevelEnabled: true, 
+                bevelThickness: 0.1, 
+                bevelSize: 0.2, 
+                bevelSegments: 15 
+            };
+            
+            const geometry = new THREE.ExtrudeBufferGeometry(shape, extrudeSettings);
+            const pos = geometry.attributes.position;
+            const uvs = geometry.attributes.uv;
+            
+            for (let i = 0; i < pos.count; i++) {
+                const x = pos.getX(i); const y = pos.getY(i); const pz = pos.getZ(i);
+                const isTopSurface = (pz >= config.bodyDepth + 0.09);
+                const isBottomSurface = (pz <= -0.09);
+                if (isTopSurface) {
+                    let u = (x / 5.4 * 0.42) + 0.25; let v = (y / 3.6 * 0.42) + 0.5;
+                    uvs.setXY(i, u, v);
+                } else if (isBottomSurface) {
+                    let u = (x / 5.4 * 0.42) + 0.75; let v = (y / 3.6 * 0.42) + 0.5;
+                    uvs.setXY(i, u, v);
+                } else {
+                    uvs.setXY(i, 0.5, 0.01); 
+                }
+            }
+            
+            initialPositions = new Float32Array(pos.array);
+            const material = new THREE.MeshStandardMaterial({ 
+                map: createPolimaxxTexture(config.baseColor),
+                roughness: 0.4, 
+                metalness: 0.0,
+                wireframe: config.wireframe
+            });
+
+            stingrayMesh = new THREE.Mesh(geometry, material);
+            stingrayMesh.rotation.x = -Math.PI / 2;
+            scene.add(stingrayMesh);
+
+            const eyeGeo = new THREE.SphereBufferGeometry(0.1, 32, 32);
+            const eyeMat = new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 100 });
+            eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+            eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+            stingrayMesh.add(eyeL);
+            stingrayMesh.add(eyeR);
+
+            stingrayMesh.add(tailGroup);
+            rebuildTail();
+        }
+
+        function rebuildTail() {
+            while(tailGroup.children.length > 0) tailGroup.remove(tailGroup.children[0]);
+            tailSegments = [];
+            const tailMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff,
+                wireframe: config.wireframe 
+            });
+            let lastSegment = null;
+            const segmentLength = 0.2;
+
+            for (let i = 0; i < config.tailCount; i++) {
+                const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
+                const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, segmentLength, 8);
+                segGeo.translate(0, -segmentLength / 2, 0); 
+                const segment = new THREE.Mesh(segGeo, tailMaterial);
+                if (i === 0) {
+                    segment.position.set(0, -1.8, 0.12);
+                    tailGroup.add(segment);
+                } else {
+                    segment.position.set(0, -segmentLength, 0);
+                    lastSegment.add(segment);
+                }
+                tailSegments.push(segment);
+                lastSegment = segment;
+            }
+        }
+
+        function getWaveHeight(x, y, time) {
+            const dist = Math.abs(x);
+            const bodyCore = 0.5;
+            const wave = dist * 2.0 - y * 0.5;
+            let intensity = (dist <= bodyCore) ? (dist * 0.1) : (dist - bodyCore) * 1.0;
+            return Math.sin(time + wave) * 0.3 * intensity * config.flapStrength;
+        }
+
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+
+            // คำนวณ delta time เพื่อให้หยุดเวลาได้แม่นยำ
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const delta = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            if (!config.isPaused) {
+                currentTime += delta * 0.003 * config.flapSpeed;
+            }
+
+            if (stingrayMesh) {
+                const posAttr = stingrayMesh.geometry.attributes.position;
+                for (let i = 0; i < posAttr.count; i++) {
+                    const x = initialPositions[i * 3];
+                    const y = initialPositions[i * 3 + 1];
+                    const z = initialPositions[i * 3 + 2];
+                    
+                    const distFromCenter = Math.abs(x);
+                    const coreWidth = 0.4;
+                    let taperScale = 1.0;
+                    
+                    if (distFromCenter > coreWidth) {
+                        const normalizedDist = (distFromCenter - coreWidth) / (2.7 - coreWidth);
+                        taperScale = 1.0 - (Math.pow(normalizedDist, 1.5) * config.wingTaper);
+                    }
+
+                    const waveHeight = getWaveHeight(x, y, currentTime);
+                    posAttr.setZ(i, (z * taperScale) + waveHeight);
+                }
+                posAttr.needsUpdate = true;
+                
+                const surfaceBaseZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
+                eyeL.position.x = -config.eyeX;
+                eyeL.position.y = config.eyeY;
+                eyeL.position.z = surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime);
+                eyeR.position.x = config.eyeX;
+                eyeR.position.y = config.eyeY;
+                eyeR.position.z = surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime);
+
+                tailSegments.forEach((seg, idx) => {
+                    const delay = idx * 0.15;
+                    seg.rotation.z = Math.sin(currentTime * 0.8 - delay) * 0.15;
+                    seg.rotation.x = Math.cos(currentTime * 0.8 - delay) * 0.1;
+                });
+            }
+            renderer.render(scene, camera);
+        }
+
+        function setupGUI() {
+            const gui = new GUI({ title: 'POLIMAXX STINGRAY CONTROLS' });
+            
+            // การแสดงผล
+            const viewFolder = gui.addFolder('Visualization');
+            viewFolder.add(config, 'isPaused').name('Pause Animation (หยุดบิน)');
+            viewFolder.add(config, 'wireframe').name('Show Wireframe (โครงตาข่าย)')
+                .onChange((val) => {
+                    stingrayMesh.material.wireframe = val;
+                    tailSegments.forEach(seg => seg.material.wireframe = val);
+                });
+            viewFolder.addColor(config, 'baseColor').name('Body Color (สีตัวปลา)')
+                .onChange((val) => {
+                    stingrayMesh.material.map = createPolimaxxTexture(val);
+                });
+            viewFolder.open();
+
+            // ปีก
+            const wingFolder = gui.addFolder('Wing Properties');
+            wingFolder.add(config, 'wingTaper', 0, 1, 0.01).name('Wing Edge Taper');
+            wingFolder.add(config, 'bodyDepth', 0.1, 0.5, 0.01).name('Main Thickness');
+            wingFolder.open();
+
+            // หาง
+            const tailFolder = gui.addFolder('Tail Properties');
+            tailFolder.add(config, 'tailCount', 10, 80, 1)
+                .name('Tail Length')
+                .onChange(rebuildTail);
+
+            // การเคลื่อนไหว
+            const animFolder = gui.addFolder('Movement Settings');
+            animFolder.add(config, 'flapSpeed', 0, 2, 0.01).name('Flap Speed');
+            animFolder.add(config, 'flapStrength', 0, 1.5, 0.01).name('Flap Strength');
+        }
+
+        function setupControls() {
+            window.addEventListener('mousedown', () => isDragging = true);
+            window.addEventListener('mouseup', () => isDragging = false);
+            window.addEventListener('mousemove', (e) => {
+                if(isDragging) {
+                    rotation.y -= e.movementX * 0.007;
+                    rotation.x -= e.movementY * 0.007;
+                    rotation.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, rotation.x));
+                    updateCameraPosition();
+                }
+            });
+            window.addEventListener('wheel', (e) => {
+                zoom = Math.max(3.5, Math.min(12, zoom + e.deltaY * 0.005));
+                updateCameraPosition();
+            }, { passive: true });
+        }
+
+        function updateCameraPosition() {
+            camera.position.set(
+                zoom * Math.sin(rotation.y) * Math.cos(rotation.x),
+                zoom * Math.sin(rotation.x),
+                zoom * Math.cos(rotation.y) * Math.cos(rotation.x)
+            );
+            camera.lookAt(0, -0.3, 0);
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+</html>
