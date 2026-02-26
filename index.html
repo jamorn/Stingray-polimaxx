@@ -3,11 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stingray 3D - Pro Edge Control</title>
+    <title>Stingray 3D - Polimaxx Edition</title>
     <style>
         body { margin: 0; background: #000a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-        #ui-container { display: none; }
-        
         .lil-gui { 
             --background-color: rgba(0, 10, 26, 0.9);
             --widget-color: #f37021;
@@ -33,7 +31,6 @@
         let rotation = { x: 0.6, y: -0.8 }; 
         let zoom = 5.5; 
 
-        // ตัวแปรเก็บเวลาสำหรับการเล่น/หยุด
         let currentTime = 0;
         let lastTimestamp = 0;
 
@@ -46,32 +43,58 @@
             bodyDepth: 0.25,
             wingTaper: 0.85, 
             tailCount: 20,
-            // เพิ่มการตั้งค่าใหม่
             isPaused: false,
             baseColor: '#ffffff',
             wireframe: false
         };
 
+        // ปรับปรุง Texture ให้มีความคมชัดสูง (2048px) และมีแถบสีสำหรับหาง
         function createPolimaxxTexture(color = '#ffffff') {
             const canvas = document.createElement('canvas');
             canvas.width = 2048; canvas.height = 1024;
             const ctx = canvas.getContext('2d');
+            
+            // พื้นหลัง
             ctx.fillStyle = color; 
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // วาดแถบสีที่ขอบล่างสุด (เพื่อให้ส่วนหาง/ขอบ ดึงไปใช้เป็นลาย)
+            ctx.fillStyle = '#f37021';
+            ctx.fillRect(0, 0, 2048, 40); 
+            ctx.fillStyle = '#0e3a66';
+            ctx.fillRect(0, 1000, 2048, 24);
+
             const drawLogoSet = (offsetX, isMirror = false) => {
                 ctx.save();
                 ctx.translate(offsetX + 512, 512);
                 if (isMirror) ctx.scale(-1, 1);
-                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 36px Arial'; ctx.fillText('POLIMAXX', 0, -140);
-                ctx.fillStyle = '#f37021'; ctx.font = '900 180px Arial'; ctx.fillText('PP', 0, -10);
-                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 32px Arial'; ctx.fillText('POLYETHYLENE', 0, 100);
-                ctx.fillStyle = '#666666'; ctx.font = 'bold 28px Arial'; ctx.fillText('NET WEIGHT 25 KG', 0, 180);
+                
+                ctx.textAlign = 'center'; 
+                ctx.textBaseline = 'middle';
+
+                // ใช้สี Navy Blue และ Orange ตามแบรนด์
+                ctx.fillStyle = '#0e3a66'; 
+                ctx.font = 'bold 42px Arial'; 
+                ctx.fillText('POLIMAXX', 0, -140);
+
+                ctx.fillStyle = '#f37021'; 
+                ctx.font = '900 210px Arial'; 
+                ctx.fillText('PP', 0, -10);
+
+                ctx.fillStyle = '#0e3a66';
+                ctx.font = 'bold 36px Arial'; 
+                ctx.fillText('POLYETHYLENE', 0, 100);
+
+                ctx.fillStyle = '#666666';
+                ctx.font = 'bold 30px Arial'; 
+                ctx.fillText('NET WEIGHT 25 KG', 0, 180);
+                
                 ctx.restore();
             };
-            drawLogoSet(0, false); 
+
+            drawLogoSet(0, false);  
             drawLogoSet(1024, true); 
-            ctx.fillStyle = color; ctx.fillRect(1020, 0, 8, 1024); 
+            
             const tex = new THREE.CanvasTexture(canvas);
             tex.anisotropy = 16;
             return tex;
@@ -81,14 +104,15 @@
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x000a1a);
             camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
             
-            const ambient = new THREE.AmbientLight(0xffffff, 0.9);
+            const ambient = new THREE.AmbientLight(0xffffff, 1.0); 
             scene.add(ambient);
-            const sun = new THREE.DirectionalLight(0xffffff, 0.3);
+            const sun = new THREE.DirectionalLight(0xffffff, 0.4);
             sun.position.set(5, 10, 7);
             scene.add(sun);
 
@@ -122,17 +146,26 @@
             const uvs = geometry.attributes.uv;
             
             for (let i = 0; i < pos.count; i++) {
-                const x = pos.getX(i); const y = pos.getY(i); const pz = pos.getZ(i);
-                const isTopSurface = (pz >= config.bodyDepth + 0.09);
-                const isBottomSurface = (pz <= -0.09);
+                const x = pos.getX(i); 
+                const y = pos.getY(i); 
+                const pz = pos.getZ(i);
+
+                // ตรวจสอบว่าเป็นหน้าบน หน้าล่าง หรือขอบ (Bevel)
+                const isTopSurface = (pz >= config.bodyDepth + 0.08);
+                const isBottomSurface = (pz <= -0.08);
+
                 if (isTopSurface) {
-                    let u = (x / 5.4 * 0.42) + 0.25; let v = (y / 3.6 * 0.42) + 0.5;
+                    let u = (x / 5.4 * 0.45) + 0.25; 
+                    let v = (y / 3.6 * 0.45) + 0.5;
                     uvs.setXY(i, u, v);
                 } else if (isBottomSurface) {
-                    let u = (x / 5.4 * 0.42) + 0.75; let v = (y / 3.6 * 0.42) + 0.5;
+                    let u = (x / 5.4 * 0.45) + 0.75; 
+                    let v = (y / 3.6 * 0.45) + 0.5;
                     uvs.setXY(i, u, v);
                 } else {
-                    uvs.setXY(i, 0.5, 0.01); 
+                    // ส่วนขอบและหาง: ให้ดึงสีจากแถบส้ม/น้ำเงินที่วาดไว้ขอบ Texture
+                    // นี่คือจุดที่ทำให้หางมี "Artwork" หรือสีสันตามต้นฉบับ
+                    uvs.setXY(i, 0.5, 0.02); 
                 }
             }
             
@@ -162,10 +195,13 @@
         function rebuildTail() {
             while(tailGroup.children.length > 0) tailGroup.remove(tailGroup.children[0]);
             tailSegments = [];
+            
+            // ใช้ Canvas เดิมเพื่อให้ส่วนประกอบของหางดึงลายสีเดียวกันมาใช้
             const tailMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0xffffff,
+                map: stingrayMesh.material.map, 
                 wireframe: config.wireframe 
             });
+
             let lastSegment = null;
             const segmentLength = 0.2;
 
@@ -173,6 +209,13 @@
                 const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
                 const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, segmentLength, 8);
                 segGeo.translate(0, -segmentLength / 2, 0); 
+                
+                // ปรับ UV ของหางแต่ละปล้องให้ดึงสีจากขอบ Artwork
+                const tailUvs = segGeo.attributes.uv;
+                for(let j=0; j<tailUvs.count; j++) {
+                    tailUvs.setXY(j, 0.5, 0.02); // ดึงสีส้ม/น้ำเงินจากขอบ
+                }
+
                 const segment = new THREE.Mesh(segGeo, tailMaterial);
                 if (i === 0) {
                     segment.position.set(0, -1.8, 0.12);
@@ -196,8 +239,6 @@
 
         function animate(timestamp) {
             requestAnimationFrame(animate);
-
-            // คำนวณ delta time เพื่อให้หยุดเวลาได้แม่นยำ
             if (!lastTimestamp) lastTimestamp = timestamp;
             const delta = timestamp - lastTimestamp;
             lastTimestamp = timestamp;
@@ -228,12 +269,8 @@
                 posAttr.needsUpdate = true;
                 
                 const surfaceBaseZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
-                eyeL.position.x = -config.eyeX;
-                eyeL.position.y = config.eyeY;
-                eyeL.position.z = surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime);
-                eyeR.position.x = config.eyeX;
-                eyeR.position.y = config.eyeY;
-                eyeR.position.z = surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime);
+                eyeL.position.set(-config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime));
+                eyeR.position.set(config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime));
 
                 tailSegments.forEach((seg, idx) => {
                     const delay = idx * 0.15;
@@ -247,33 +284,24 @@
         function setupGUI() {
             const gui = new GUI({ title: 'POLIMAXX STINGRAY CONTROLS' });
             
-            // การแสดงผล
             const viewFolder = gui.addFolder('Visualization');
-            viewFolder.add(config, 'isPaused').name('Pause Animation (หยุดบิน)');
-            viewFolder.add(config, 'wireframe').name('Show Wireframe (โครงตาข่าย)')
-                .onChange((val) => {
-                    stingrayMesh.material.wireframe = val;
-                    tailSegments.forEach(seg => seg.material.wireframe = val);
-                });
-            viewFolder.addColor(config, 'baseColor').name('Body Color (สีตัวปลา)')
-                .onChange((val) => {
-                    stingrayMesh.material.map = createPolimaxxTexture(val);
-                });
-            viewFolder.open();
+            viewFolder.add(config, 'isPaused').name('Pause Animation');
+            viewFolder.add(config, 'wireframe').name('Show Wireframe').onChange((val) => {
+                stingrayMesh.material.wireframe = val;
+                tailSegments.forEach(seg => seg.material.wireframe = val);
+            });
+            viewFolder.addColor(config, 'baseColor').name('Body Color').onChange((val) => {
+                stingrayMesh.material.map = createPolimaxxTexture(val);
+                tailSegments.forEach(seg => seg.material.map = stingrayMesh.material.map);
+            });
 
-            // ปีก
             const wingFolder = gui.addFolder('Wing Properties');
             wingFolder.add(config, 'wingTaper', 0, 1, 0.01).name('Wing Edge Taper');
             wingFolder.add(config, 'bodyDepth', 0.1, 0.5, 0.01).name('Main Thickness');
-            wingFolder.open();
 
-            // หาง
             const tailFolder = gui.addFolder('Tail Properties');
-            tailFolder.add(config, 'tailCount', 10, 80, 1)
-                .name('Tail Length')
-                .onChange(rebuildTail);
+            tailFolder.add(config, 'tailCount', 10, 80, 1).name('Tail Length').onChange(rebuildTail);
 
-            // การเคลื่อนไหว
             const animFolder = gui.addFolder('Movement Settings');
             animFolder.add(config, 'flapSpeed', 0, 2, 0.01).name('Flap Speed');
             animFolder.add(config, 'flapStrength', 0, 1.5, 0.01).name('Flap Strength');
