@@ -3,67 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Stingray Swarm - Polimaxx Dynamic Theme</title>
+    <title>Stingray Swarm - Polimaxx Interactive Env</title>
     <style>
         body { 
             margin: 0; 
             background: #00050a; 
             overflow: hidden; 
             font-family: 'Segoe UI', Tahoma, sans-serif; 
-            touch-action: none;
+            touch-action: none; /* ป้องกันการเลื่อนหน้าจอบนมือถือ */
             -webkit-user-select: none;
             user-select: none;
-            transition: background 0.8s ease;
         }
         canvas { display: block; outline: none; }
-        
-        #ui-layer {
+        .lil-gui { --width: 300px; }
+
+        #mode-toggle {
             position: absolute;
             top: 20px;
             left: 20px;
-            pointer-events: none;
-        }
-        #info {
-            color: rgba(127, 127, 127, 0.6);
-            font-size: 11px;
-            letter-spacing: 2px;
-            margin-bottom: 10px;
-        }
-        .btn-toggle {
-            background: rgba(255, 255, 255, 0.15);
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 18px;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 30px;
             color: white;
-            padding: 10px 22px;
-            font-size: 12px;
-            font-weight: bold;
-            border-radius: 25px;
             cursor: pointer;
-            pointer-events: auto;
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            backdrop-filter: blur(12px);
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            z-index: 100;
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            text-transform: uppercase;
         }
-        body.daylight-active .btn-toggle {
-            background: rgba(255, 255, 255, 0.8);
-            border-color: rgba(14, 58, 102, 0.2);
-            color: #0e3a66;
-            box-shadow: 0 4px 15px rgba(0, 168, 232, 0.2);
+        
+        #mode-toggle.daylight-ui {
+            background: rgba(255, 255, 255, 0.7);
+            color: #0e3a66; 
+            border: 1px solid rgba(14, 58, 102, 0.3);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
         }
-        .btn-toggle:hover {
-            transform: scale(1.05);
-            background: #ef0101;
-            color: white;
-            border-color: #ef0101;
+
+        #mode-toggle:hover {
+            transform: translateY(-2px);
+            background: rgba(0, 0, 0, 0.6);
+        }
+        #mode-toggle.daylight-ui:hover {
+            background: rgba(255, 255, 255, 0.9);
         }
     </style>
 </head>
-<body class="dark-mode-active">
+<body>
 
-    <div id="ui-layer">
-        <div id="info">POLIMAXX PRODUCT VISUALIZER</div>
-        <button id="modeToggle" class="btn-toggle">SWITCH TO SUNNY OCEAN</button>
-    </div>
+    <button id="mode-toggle">
+        <span id="mode-icon">🌙</span>
+        <span id="mode-text">Dark Mode</span>
+    </button>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
@@ -72,83 +68,115 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19"></script>
 
     <script>
         const config = {
-            count: 10,
-            bounds: 60,
+            count: 15, 
+            bounds: 80,
             minSpeed: 0.12,
             maxSpeed: 0.2,
             turnSpeed: 0.012, 
             flapStrength: 0.6,
             flapSpeed: 0.75,
-            eyeHover: 0.23,
-            eyeX: 0.31,
-            eyeY: 1.53, 
-            bodyDepth: 0.25, 
-            wingTaper: 0.85, 
+            eyeHover: 0.08,
+            eyeX: 0.45,
+            eyeY: 1.50, 
+            bodyDepth: 0.45, 
+            wingTaper: 0.15, 
             tailCount: 22,   
-            darkBase: '#ef0101', 
-            lightBase: '#0e3a66',
+            baseColor: '#ef0101', 
             eyeColor: '#3928b8',  
             tailColor: '#0e5167',
-            particleCount: 1500
+            bloomStrength: 1.5,
+            bloomRadius: 0.4,
+            bloomThreshold: 0.21,
+            separationDist: 15,
+            separationForce: 0.05
+        };
+
+        const envSettings = {
+            background: '#000810',
+            ambientIntensity: 1.0,
+            sunIntensity: 0.8,
+            rimIntensity: 1.5,
+            fogNear: 40,
+            fogFar: 150,
+            showGrid: true,
+            preset: 'Dark'
         };
 
         let scene, camera, renderer, composer, bloomPass, rayInstances = [];
-        let sharedMaterial, eyeMaterial, tailMaterial, floorMaterial;
-        let spotLight, sunLight, ambientLight, hemiLight, marineSnow;
-        
-        // Input Variables
-        let mouse = new THREE.Vector2(0, 0);
-        let targetRotation = new THREE.Vector2(0, 0);
-        let currentRotation = new THREE.Vector2(0, 0);
-        let targetZoom = 100;
-        let currentZoom = 100;
+        let ambientLight, sunLight, rimLight, gridHelper;
+        let sharedMaterial, eyeMaterial, tailMaterial; 
+        let isPointerDown = false, pointerPos = { x: 0, y: 0 };
+        let orbitRotation = { x: 0.2, y: 0 };
+        let zoom = 110; 
         let lastTimestamp = 0;
-        let isDarkMode = true;
-        let darkTexture, lightTexture;
+        let gui;
 
-        // Touch handling
-        let touchStartDist = 0;
-        let isTouching = false;
-        let lastTouchPos = new THREE.Vector2();
+        // สำหรับ Multi-touch Zoom
+        let initialPinchDist = 0;
+        let initialZoom = 0;
 
-        function createPolimaxxTexture(baseColor, isLightMode = false) {
+        function getBrightness(hexColor) {
+            const rgb = parseInt(hexColor.replace('#', ''), 16);
+            const r = (rgb >> 16) & 0xff;
+            const g = (rgb >> 8) & 0xff;
+            const b = (rgb >> 0) & 0xff;
+            return (r * 299 + g * 587 + b * 114) / 1000;
+        }
+
+        function createPolimaxxTexture(color = '#ffffff') {
             const canvas = document.createElement('canvas');
             canvas.width = 2048; canvas.height = 1024;
             const ctx = canvas.getContext('2d');
+            const brightness = getBrightness(color);
             const brandBlue = '#0e3a66', brandOrange = '#f37021';
-            
-            ctx.fillStyle = baseColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const textColor = brightness > 140 ? brandBlue : '#ffffff';
+
+            ctx.fillStyle = color; ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = brandOrange; ctx.fillRect(0, 0, 2048, 60); 
-            ctx.fillStyle = isLightMode ? '#0a2a4d' : brandBlue; ctx.fillRect(0, 964, 2048, 60);
+            ctx.fillStyle = brandBlue; ctx.fillRect(0, 964, 2048, 60);
             
             const drawLogoSet = (offsetX, isMirror = false) => {
                 ctx.save();
                 ctx.translate(offsetX + 512, 512);
                 if (isMirror) ctx.scale(-1, 1);
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillStyle = "#ffffff"; ctx.font = 'bold 44px Arial'; ctx.fillText('POLIMAXX', 0, -145);
+                ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 10;
+                ctx.fillStyle = textColor; ctx.font = 'bold 44px Arial'; ctx.fillText('POLIMAXX', 0, -145);
                 ctx.fillStyle = brandOrange; ctx.font = '900 220px Arial'; ctx.fillText('PP', 0, -10);
-                ctx.fillStyle = "#ffffff"; ctx.font = 'bold 38px Arial'; ctx.fillText('POLYETHYLENE', 0, 105);
+                ctx.fillStyle = textColor; ctx.font = 'bold 38px Arial'; ctx.fillText('POLYETHYLENE', 0, 105);
                 ctx.restore();
             };
             drawLogoSet(0, false); drawLogoSet(1024, true); 
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.anisotropy = 16;
-            return tex;
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.needsUpdate = true;
+            return texture;
         }
 
         class Stingray {
             constructor() {
                 this.group = new THREE.Group();
                 this.animTime = Math.random() * 100;
-                this.moveSpeed = config.minSpeed + Math.random() * (config.maxSpeed - config.minSpeed);
+                
+                const rand = Math.random();
+                let scale;
+                if (rand > 0.92) scale = 4.5 + Math.random() * 2.0; 
+                else if (rand > 0.75) scale = 2.5 + Math.random() * 1.5; 
+                else scale = 0.8 + Math.random() * 0.8; 
+
+                this.group.scale.set(scale, scale, scale);
+                this.radius = scale * 2.5;
+
+                const baseSpeed = config.minSpeed + Math.random() * (config.maxSpeed - config.minSpeed);
+                this.moveSpeed = scale > 3 ? baseSpeed * 0.5 : baseSpeed;
+
                 const angle = Math.random() * Math.PI * 2;
-                this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.2, Math.sin(angle)).normalize();
+                this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.1, Math.sin(angle)).normalize();
                 this.targetDirection = this.direction.clone();
-                this.group.position.set((Math.random()-0.5)*100, 20 + Math.random()*40, (Math.random()-0.5)*100);
+                this.group.position.set((Math.random()-0.5)*140, (Math.random()-0.5)*50, (Math.random()-0.5)*140);
                 this.changeTargetTime = 0;
                 this.currentRoll = 0; 
                 this.initMesh();
@@ -157,22 +185,41 @@
 
             initMesh() {
                 const shape = new THREE.Shape();
-                shape.moveTo(0, -1.8); shape.bezierCurveTo(1.7, -1.6, 2.7, -0.8, 2.7, 0); 
-                shape.bezierCurveTo(2.7, 0.8, 1.4, 1.6, 0, 1.8); shape.bezierCurveTo(-1.4, 1.6, -2.7, 0.8, -2.7, 0); 
-                shape.bezierCurveTo(-2.7, -0.8, -1.7, -1.6, 0, -1.8);
-                
+                shape.moveTo(0, -1.8); 
+                shape.bezierCurveTo(1.7, -1.6, 3.2, -0.8, 3.2, 0); 
+                shape.bezierCurveTo(3.2, 0.8, 1.4, 1.6, 0, 1.8); 
+                shape.bezierCurveTo(-1.4, 1.6, -3.2, 0.8, -3.2, 0); 
+                shape.bezierCurveTo(-3.2, -0.8, -1.7, -1.6, 0, -1.8);
+
                 const geometry = new THREE.ExtrudeBufferGeometry(shape, { 
                     depth: config.bodyDepth, 
-                    bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.25, bevelSegments: 15 
+                    bevelEnabled: true, 
+                    bevelThickness: 0.15, 
+                    bevelSize: 0.3, 
+                    bevelSegments: 15 
                 });
 
                 const pos = geometry.attributes.position;
                 const uvs = geometry.attributes.uv;
+
                 for (let i = 0; i < pos.count; i++) {
-                    const x = pos.getX(i), y = pos.getY(i), pz = pos.getZ(i);
-                    if (pz >= config.bodyDepth + 0.1) uvs.setXY(i, (-x / 5.4 * 0.45) + 0.25, (-y / 3.6 * 0.45) + 0.5);
-                    else if (pz <= -0.1) uvs.setXY(i, (-x / 5.4 * 0.45) + 0.75, (-y / 3.6 * 0.45) + 0.5);
-                    else uvs.setXY(i, 0.5, (pz > config.bodyDepth / 2) ? 0.03 : 0.97);
+                    const x = pos.getX(i);
+                    const y = pos.getY(i);
+                    const z = pos.getZ(i);
+                    
+                    const distFromCenter = Math.abs(x) / 3.2; 
+                    const taperFactor = THREE.MathUtils.lerp(1.0, config.wingTaper, distFromCenter);
+                    
+                    const centeredZ = z - (config.bodyDepth / 2);
+                    pos.setZ(i, (centeredZ * taperFactor) + (config.bodyDepth / 2));
+
+                    if (z >= config.bodyDepth - 0.05) {
+                        uvs.setXY(i, (-x / 6.4 * 0.45) + 0.25, (-y / 3.6 * 0.45) + 0.5);
+                    } else if (z <= 0.05) {
+                        uvs.setXY(i, (-x / 6.4 * 0.45) + 0.75, (-y / 3.6 * 0.45) + 0.5);
+                    } else {
+                        uvs.setXY(i, 0.5, (z > config.bodyDepth / 2) ? 0.03 : 0.97);
+                    }
                 }
                 
                 this.initialPositions = new Float32Array(pos.array);
@@ -183,6 +230,11 @@
                 const eyeGeo = new THREE.SphereBufferGeometry(0.12, 16, 16);
                 this.eyeL = new THREE.Mesh(eyeGeo, eyeMaterial); 
                 this.eyeR = new THREE.Mesh(eyeGeo, eyeMaterial);
+                
+                const eyeDistFromCenter = config.eyeX / 3.2;
+                const eyeTaperFactor = THREE.MathUtils.lerp(1.0, config.wingTaper, eyeDistFromCenter);
+                this.eyeZPos = (config.bodyDepth / 2) * eyeTaperFactor; 
+
                 this.mesh.add(this.eyeL, this.eyeR);
 
                 this.tailGroup = new THREE.Group();
@@ -193,27 +245,43 @@
                     const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, 0.22, 8);
                     segGeo.translate(0, -0.11, 0); 
                     const seg = new THREE.Mesh(segGeo, tailMaterial);
-                    if (i === 0) { seg.position.set(0, 1.8, 0.12); this.tailGroup.add(seg); }
+                    if (i === 0) { seg.position.set(0, 1.8, config.bodyDepth/2); this.tailGroup.add(seg); }
                     else { seg.position.set(0, 0.22, 0); lastSeg.add(seg); }
                     this.tailSegments.push(seg); lastSeg = seg;
                 }
                 this.mesh.add(this.tailGroup);
             }
 
-            update(delta) {
+            update(delta, allRays) {
                 this.animTime += delta * 0.003 * config.flapSpeed;
                 const t = this.animTime;
-                
+
                 if (t > this.changeTargetTime) {
                     const angle = Math.atan2(this.direction.x, this.direction.z) + (Math.random()-0.5)*Math.PI*0.5;
-                    this.targetDirection.set(Math.sin(angle), (Math.random()-0.5)*0.1, Math.cos(angle)).normalize();
+                    this.targetDirection.set(Math.sin(angle), (Math.random()-0.5)*0.2, Math.cos(angle)).normalize();
                     this.changeTargetTime = t + 10 + Math.random()*20;
                 }
-                if (this.group.position.y < 10) this.targetDirection.y += 0.02;
-                if (this.group.position.y > 60) this.targetDirection.y -= 0.02;
-                if (new THREE.Vector2(this.group.position.x, this.group.position.z).length() > config.bounds) {
-                    const toCenter = new THREE.Vector3().copy(this.group.position).negate().normalize();
-                    this.targetDirection.lerp(toCenter, 0.02).normalize();
+
+                const separationVec = new THREE.Vector3();
+                let count = 0;
+                for(let other of allRays) {
+                    if (other === this) continue;
+                    const dist = this.group.position.distanceTo(other.group.position);
+                    const minDist = (this.radius + other.radius) + config.separationDist;
+                    if (dist < minDist) {
+                        const diff = new THREE.Vector3().subVectors(this.group.position, other.group.position);
+                        diff.normalize().divideScalar(Math.max(0.1, dist));
+                        separationVec.add(diff);
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    separationVec.divideScalar(count);
+                    this.targetDirection.add(separationVec.multiplyScalar(config.separationForce)).normalize();
+                }
+
+                if (this.group.position.length() > config.bounds) {
+                    this.targetDirection.lerp(new THREE.Vector3().copy(this.group.position).negate().normalize(), 0.02).normalize();
                 }
 
                 const lastY = this.group.rotation.y;
@@ -232,14 +300,18 @@
                 for (let i = 0; i < posAttr.count; i++) {
                     const x = this.initialPositions[i*3], y = this.initialPositions[i*3+1], pz = this.initialPositions[i*3+2];
                     const d = Math.abs(x);
-                    const wave = Math.sin(t + d*2.0 - y*0.5) * 0.3 * (d <= 0.4 ? d*0.1 : (d-0.4)*1.1) * config.flapStrength;
+                    const flapAmp = (d <= 0.4 ? d*0.1 : (d-0.4)*1.2);
+                    const wave = Math.sin(t + d*1.8 - y*0.5) * 0.35 * flapAmp * config.flapStrength;
                     posAttr.setZ(i, pz + wave);
                 }
                 posAttr.needsUpdate = true;
-                const sZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
-                const getW = (x, y) => { const d = Math.abs(x); return Math.sin(t + d*2.0 - y*0.5)*0.3*(d<=0.4?d*0.1:(d-0.4)*1.1)*config.flapStrength; };
-                this.eyeL.position.set(-config.eyeX, -config.eyeY, sZ + config.eyeHover + getW(-config.eyeX, -config.eyeY));
-                this.eyeR.position.set(config.eyeX, -config.eyeY, sZ + config.eyeHover + getW(config.eyeX, -config.eyeY));
+                
+                const getW = (x, y) => { const d = Math.abs(x); return Math.sin(t + d*1.8 - y*0.5)*0.35*(d<=0.4?d*0.1:(d-0.4)*1.2)*config.flapStrength; };
+                
+                const surfaceZ = (config.bodyDepth / 2) + this.eyeZPos; 
+                this.eyeL.position.set(-config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(-config.eyeX, -config.eyeY));
+                this.eyeR.position.set(config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(config.eyeX, -config.eyeY));
+                
                 this.tailSegments.forEach((seg, i) => {
                     seg.rotation.z = Math.sin(t*0.8/config.flapSpeed - i*0.15)*0.18;
                     seg.rotation.x = Math.cos(t*0.8/config.flapSpeed - i*0.15)*0.12;
@@ -247,176 +319,214 @@
             }
         }
 
+        function updateGridColor(preset) {
+            if (gridHelper) scene.remove(gridHelper);
+            const gridColor = (preset === 'Dark') ? 0x00ffff : 0x004488;
+            gridHelper = new THREE.GridHelper(500, 50, gridColor, gridColor);
+            gridHelper.position.y = -60;
+            if(envSettings.showGrid) scene.add(gridHelper);
+        }
+
+        function applyPreset(v) {
+            const btn = document.getElementById('mode-toggle');
+            if (v === 'Daylight') {
+                envSettings.background = '#88ccff';
+                envSettings.ambientIntensity = 1.6;
+                envSettings.sunIntensity = 1.2;
+                envSettings.rimIntensity = 0.6;
+                envSettings.fogNear = 100;
+                envSettings.fogFar = 500;
+                bloomPass.strength = 0.2; 
+                eyeMaterial.emissiveIntensity = 0.4;
+                tailMaterial.emissiveIntensity = 0.2;
+                document.getElementById('mode-text').innerText = 'Daylight Mode';
+                document.getElementById('mode-icon').innerText = '☀️';
+                btn.classList.add('daylight-ui');
+            } else {
+                envSettings.background = '#000810';
+                envSettings.ambientIntensity = 1.0;
+                envSettings.sunIntensity = 0.8;
+                envSettings.rimIntensity = 1.5;
+                envSettings.fogNear = 40;
+                envSettings.fogFar = 150;
+                bloomPass.strength = 1.5;
+                eyeMaterial.emissiveIntensity = 2.0;
+                tailMaterial.emissiveIntensity = 1.5;
+                document.getElementById('mode-text').innerText = 'Dark Mode';
+                document.getElementById('mode-icon').innerText = '🌙';
+                btn.classList.remove('daylight-ui');
+            }
+            updateGridColor(v);
+            scene.background.set(envSettings.background);
+            scene.fog.color.set(envSettings.background);
+            scene.fog.near = envSettings.fogNear;
+            scene.fog.far = envSettings.fogFar;
+            ambientLight.intensity = envSettings.ambientIntensity;
+            sunLight.intensity = envSettings.sunIntensity;
+            rimLight.intensity = envSettings.rimIntensity;
+            if (gui) gui.controllersRecursive().forEach(c => c.updateDisplay());
+        }
+
+        function initGUI() {
+            if (gui) gui.destroy();
+            gui = new lil.GUI({ title: 'Polimaxx Stingray Swarm' });
+            
+            const envFolder = gui.addFolder('Environment Settings');
+            envFolder.add(envSettings, 'preset', ['Dark', 'Daylight']).name('Mode Preset').onChange(applyPreset);
+
+            const motionFolder = gui.addFolder('Stingray Motion');
+            motionFolder.add(config, 'flapSpeed', 0.1, 2.0).name('Flap Speed');
+            motionFolder.add(config, 'flapStrength', 0.1, 2.0).name('Flap Strength');
+
+            const bodyFolder = gui.addFolder('Body Structure');
+            bodyFolder.add(config, 'bodyDepth', 0.1, 1.0).name('Center Thickness').onChange(() => {
+                rayInstances.forEach(r => { scene.remove(r.group); });
+                rayInstances = [];
+                for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+            });
+            bodyFolder.add(config, 'wingTaper', 0.05, 1.0).name('Wing Taper (Slope)').onChange(() => {
+                rayInstances.forEach(r => { scene.remove(r.group); });
+                rayInstances = [];
+                for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+            });
+
+            const colorFolder = gui.addFolder('Stingray Appearance');
+            colorFolder.addColor(config, 'baseColor').name('Body Color').onChange(v => {
+                sharedMaterial.map.dispose(); sharedMaterial.map = createPolimaxxTexture(v);
+            });
+            colorFolder.addColor(config, 'eyeColor').name('Eye Color').onChange(v => {
+                eyeMaterial.color.set(v); eyeMaterial.emissive.set(v);
+            });
+
+            gui.close();
+        }
+
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color('#000308');
-            scene.fog = new THREE.FogExp2('#00050a', 0.012);
+            scene.background = new THREE.Color(envSettings.background);
+            scene.fog = new THREE.Fog(envSettings.background, envSettings.fogNear, envSettings.fogFar);
 
-            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
-            camera.position.set(0, 5, 100);
-
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
 
-            darkTexture = createPolimaxxTexture(config.darkBase, false);
-            lightTexture = createPolimaxxTexture(config.lightBase, true);
-
-            sharedMaterial = new THREE.MeshStandardMaterial({ 
-                map: darkTexture, roughness: 0.3, metalness: 0.1,
-                emissive: new THREE.Color(config.darkBase), emissiveIntensity: 0.15
-            });
-            eyeMaterial = new THREE.MeshPhongMaterial({ color: config.eyeColor, emissive: config.eyeColor, emissiveIntensity: 2.5, shininess: 100 });
-            tailMaterial = new THREE.MeshStandardMaterial({ color: config.tailColor, emissive: config.tailColor, emissiveIntensity: 1.2 });
-
-            ambientLight = new THREE.AmbientLight(0xffffff, 0.1); 
-            scene.add(ambientLight);
-            hemiLight = new THREE.HemisphereLight(0x4488ff, 0x000205, 0.6);
-            scene.add(hemiLight);
-            spotLight = new THREE.SpotLight(0xffffff, 12, 300, Math.PI/6, 0.3, 1.2);
-            spotLight.position.set(0, 120, 0);
-            scene.add(spotLight);
-            sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            sunLight.position.set(50, 100, 50);
-            sunLight.visible = false;
-            scene.add(sunLight);
-
-            const pGeo = new THREE.BufferGeometry();
-            const pPos = [];
-            for (let i = 0; i < config.particleCount; i++) {
-                pPos.push((Math.random() - 0.5) * 300, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 300);
-            }
-            pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
-            marineSnow = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x88ccff, size: 0.18, transparent: true, opacity: 0.5 }));
-            scene.add(marineSnow);
-
-            floorMaterial = new THREE.MeshStandardMaterial({ color: 0x010205, roughness: 1 });
-            const floor = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), floorMaterial);
-            floor.rotation.x = -Math.PI / 2; floor.position.y = -50;
-            scene.add(floor);
-
+            const renderScene = new THREE.RenderPass(scene, camera);
+            bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), config.bloomStrength, config.bloomRadius, config.bloomThreshold);
             composer = new THREE.EffectComposer(renderer);
-            composer.addPass(new THREE.RenderPass(scene, camera));
-            bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.2, 0.4, 0.3);
+            composer.addPass(renderScene);
             composer.addPass(bloomPass);
+
+            sharedMaterial = new THREE.MeshStandardMaterial({ map: createPolimaxxTexture(config.baseColor), roughness: 0.3, metalness: 0.2 });
+            eyeMaterial = new THREE.MeshPhongMaterial({ color: config.eyeColor, emissive: config.eyeColor, emissiveIntensity: 2.0, shininess: 100 });
+            tailMaterial = new THREE.MeshStandardMaterial({ color: config.tailColor, emissive: config.tailColor, emissiveIntensity: 1.5 });
+
+            updateGridColor(envSettings.preset);
+
+            ambientLight = new THREE.AmbientLight(0x4488ff, envSettings.ambientIntensity); scene.add(ambientLight);
+            sunLight = new THREE.DirectionalLight(0xffffff, envSettings.sunIntensity);
+            sunLight.position.set(50, 100, 50); scene.add(sunLight);
+            rimLight = new THREE.DirectionalLight(0xffffff, envSettings.rimIntensity);
+            rimLight.position.set(-50, -50, -50); scene.add(rimLight);
 
             for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
 
-            // Listeners
-            document.getElementById('modeToggle').addEventListener('click', toggleMode);
+            updateCamera();
+            setupInteractions();
+            initGUI();
+            setupExternalToggle();
             window.addEventListener('resize', onResize);
-            window.addEventListener('mousemove', onMouseMove);
-            window.addEventListener('wheel', onWheel, { passive: false });
-            
-            // Touch Events
-            window.addEventListener('touchstart', onTouchStart, { passive: false });
-            window.addEventListener('touchmove', onTouchMove, { passive: false });
-            window.addEventListener('touchend', onTouchEnd);
-
             requestAnimationFrame(animate);
         }
 
-        function toggleMode() {
-            isDarkMode = !isDarkMode;
-            const btn = document.getElementById('modeToggle');
-            const body = document.body;
-            if (isDarkMode) {
-                body.classList.remove('daylight-active');
-                scene.background.set('#000308'); scene.fog.color.set('#00050a'); scene.fog.density = 0.012;
-                ambientLight.intensity = 0.1; hemiLight.intensity = 0.6; sunLight.visible = false; spotLight.visible = true;
-                marineSnow.visible = true; sharedMaterial.map = darkTexture; sharedMaterial.emissive.set(config.darkBase);
-                sharedMaterial.emissiveIntensity = 0.15; floorMaterial.color.set('#010205'); bloomPass.strength = 1.2;
-                btn.innerText = "SWITCH TO SUNNY OCEAN";
-            } else {
-                body.classList.add('daylight-active');
-                scene.background.set('#0096c7'); scene.fog.color.set('#0096c7'); scene.fog.density = 0.003; 
-                ambientLight.intensity = 0.7; hemiLight.intensity = 0.4; sunLight.visible = true; spotLight.visible = false;
-                marineSnow.visible = false; sharedMaterial.map = lightTexture; sharedMaterial.emissive.set(config.lightBase);
-                sharedMaterial.emissiveIntensity = 0.02; floorMaterial.color.set('#7eb8d1'); bloomPass.strength = 0.1;
-                btn.innerText = "SWITCH TO DEEP SEA";
-            }
-            sharedMaterial.needsUpdate = true;
+        function setupExternalToggle() {
+            document.getElementById('mode-toggle').addEventListener('click', () => {
+                envSettings.preset = (envSettings.preset === 'Dark') ? 'Daylight' : 'Dark';
+                applyPreset(envSettings.preset);
+            });
         }
 
-        function onMouseMove(e) {
-            if (!isTouching) {
-                targetRotation.x = (e.clientX / window.innerWidth) * 2 - 1;
-                targetRotation.y = -(e.clientY / window.innerHeight) * 2 + 1;
-            }
+        // ระบบ Interaction ใหม่ที่เหมาะสมกับ Mobile/Tablet
+        function setupInteractions() {
+            const el = renderer.domElement;
+            const touches = new Map();
+
+            el.addEventListener('pointerdown', e => {
+                if(e.target.closest('.lil-gui') || e.target.closest('#mode-toggle')) return; 
+                
+                touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                isPointerDown = true;
+                pointerPos = { x: e.clientX, y: e.clientY };
+                
+                // จัดการ Pinch Zoom (Multi-touch)
+                if (touches.size === 2) {
+                    const pts = Array.from(touches.values());
+                    initialPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                    initialZoom = zoom;
+                }
+                
+                el.setPointerCapture(e.pointerId);
+            });
+
+            window.addEventListener('pointermove', e => {
+                if (!touches.has(e.pointerId)) return;
+                touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+                if (touches.size === 1) {
+                    // หมุนกล้อง (1 นิ้ว)
+                    orbitRotation.y -= (e.clientX - pointerPos.x) * 0.005;
+                    orbitRotation.x -= (e.clientY - pointerPos.y) * 0.005;
+                    orbitRotation.x = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, orbitRotation.x));
+                    pointerPos = { x: e.clientX, y: e.clientY };
+                } else if (touches.size === 2) {
+                    // ซูม (2 นิ้ว)
+                    const pts = Array.from(touches.values());
+                    const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                    const diff = initialPinchDist - currentDist;
+                    zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 30, 600);
+                }
+                
+                updateCamera();
+            });
+
+            const endPointer = (e) => {
+                touches.delete(e.pointerId);
+                if (touches.size < 1) isPointerDown = false;
+                if (touches.size < 2) initialPinchDist = 0;
+            };
+
+            window.addEventListener('pointerup', endPointer);
+            window.addEventListener('pointercancel', endPointer);
+
+            // รองรับ Wheel บน Desktop เหมือนเดิม
+            el.addEventListener('wheel', e => {
+                zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 30, 600);
+                updateCamera();
+            }, { passive: true });
         }
 
-        function onWheel(e) {
-            e.preventDefault();
-            targetZoom += e.deltaY * 0.05;
-            targetZoom = Math.max(40, Math.min(180, targetZoom));
-        }
-
-        function onTouchStart(e) {
-            isTouching = true;
-            if (e.touches.length === 1) {
-                lastTouchPos.set(e.touches[0].pageX, e.touches[0].pageY);
-            } else if (e.touches.length === 2) {
-                touchStartDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-            }
-        }
-
-        function onTouchMove(e) {
-            e.preventDefault();
-            if (e.touches.length === 1) {
-                const deltaX = e.touches[0].pageX - lastTouchPos.x;
-                const deltaY = e.touches[0].pageY - lastTouchPos.y;
-                targetRotation.x += deltaX * 0.005;
-                targetRotation.y -= deltaY * 0.005;
-                lastTouchPos.set(e.touches[0].pageX, e.touches[0].pageY);
-            } else if (e.touches.length === 2) {
-                const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                const delta = touchStartDist - dist;
-                targetZoom += delta * 0.2;
-                targetZoom = Math.max(40, Math.min(180, targetZoom));
-                touchStartDist = dist;
-            }
-        }
-
-        function onTouchEnd() {
-            isTouching = false;
+        function updateCamera() {
+            camera.position.set(
+                zoom * Math.sin(orbitRotation.y) * Math.cos(orbitRotation.x),
+                zoom * Math.sin(orbitRotation.x),
+                zoom * Math.cos(orbitRotation.y) * Math.cos(orbitRotation.x)
+            );
+            camera.lookAt(0, 0, 0);
         }
 
         function onResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight); 
             composer.setSize(window.innerWidth, window.innerHeight);
         }
 
         function animate(timestamp) {
+            requestAnimationFrame(animate);
             const delta = timestamp - (lastTimestamp || timestamp);
             lastTimestamp = timestamp;
-
-            rayInstances.forEach(ray => ray.update(delta));
-            if (isDarkMode) {
-                marineSnow.position.y -= 0.04;
-                if (marineSnow.position.y < -70) marineSnow.position.y = 70;
-            }
-
-            // Smooth Movement
-            currentRotation.x += (targetRotation.x - currentRotation.x) * 0.05;
-            currentRotation.y += (targetRotation.y - currentRotation.y) * 0.05;
-            currentZoom += (targetZoom - currentZoom) * 0.05;
-
-            camera.position.x = Math.sin(currentRotation.x * 0.8) * currentZoom;
-            camera.position.z = Math.cos(currentRotation.x * 0.8) * currentZoom;
-            camera.position.y = 5 + currentRotation.y * 30;
-            camera.lookAt(0, 20, 0);
-
-            if (isDarkMode) {
-                spotLight.position.x = currentRotation.x * 60;
-                spotLight.target.position.x = currentRotation.x * 80;
-                spotLight.target.position.z = -currentRotation.y * 50;
-            }
-
+            rayInstances.forEach(ray => ray.update(delta, rayInstances));
             composer.render();
-            requestAnimationFrame(animate);
         }
 
         window.onload = init;
