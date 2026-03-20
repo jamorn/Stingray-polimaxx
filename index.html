@@ -3,290 +3,423 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Stingray 3D - Universal Controls</title>
+    <title>Stingray Swarm - Polimaxx Dynamic Theme</title>
     <style>
         body { 
             margin: 0; 
-            background: #000a1a; 
+            background: #00050a; 
             overflow: hidden; 
-            font-family: 'Segoe UI', sans-serif; 
-            touch-action: none; /* ป้องกัน browser gesture แทรกแซงการหมุน */
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+            touch-action: none;
             -webkit-user-select: none;
             user-select: none;
+            transition: background 0.8s ease;
         }
         canvas { display: block; outline: none; }
-        .lil-gui { 
-            --background-color: rgba(0, 10, 26, 0.9);
-            --widget-color: #f37021;
-            font-size: 13px;
+        
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
         }
-        /* ปรับแต่ง GUI ให้เหมาะกับนิ้วสัมผัสบนมือถือ */
-        @media (max-width: 768px) {
-            .lil-gui { width: 220px; }
-            .lil-gui .name { font-size: 11px; }
+        #info {
+            color: rgba(127, 127, 127, 0.6);
+            font-size: 11px;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+        .btn-toggle {
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 10px 22px;
+            font-size: 12px;
+            font-weight: bold;
+            border-radius: 25px;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            text-transform: uppercase;
+        }
+        body.daylight-active .btn-toggle {
+            background: rgba(255, 255, 255, 0.8);
+            border-color: rgba(14, 58, 102, 0.2);
+            color: #0e3a66;
+            box-shadow: 0 4px 15px rgba(0, 168, 232, 0.2);
+        }
+        .btn-toggle:hover {
+            transform: scale(1.05);
+            background: #ef0101;
+            color: white;
+            border-color: #ef0101;
         }
     </style>
 </head>
-<body>
+<body class="dark-mode-active">
+
+    <div id="ui-layer">
+        <div id="info">POLIMAXX PRODUCT VISUALIZER</div>
+        <button id="modeToggle" class="btn-toggle">SWITCH TO SUNNY OCEAN</button>
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script type="module">
-        import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.esm.min.js';
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
-        let scene, camera, renderer, stingrayMesh, initialPositions;
-        let eyeL, eyeR;
-        let tailSegments = []; 
-        let tailGroup = new THREE.Group();
-        
-        // State สำหรับการควบคุม
-        let isPointerDown = false;
-        let rotation = { x: 0.6, y: -0.8 }; 
-        let zoom = window.innerWidth < 768 ? 8 : 5.5; // Auto detect: มือถือเริ่มที่ระยะไกลกว่าเล็กน้อย
-        let pointerPos = { x: 0, y: 0 };
-        let lastPinchDist = 0; // สำหรับ Pinch Zoom บนมือถือ
-
-        let currentTime = 0;
-        let lastTimestamp = 0;
-
+    <script>
         const config = {
-            flapStrength: 0.65,
+            count: 10,
+            bounds: 60,
+            minSpeed: 0.12,
+            maxSpeed: 0.2,
+            turnSpeed: 0.012, 
+            flapStrength: 0.6,
             flapSpeed: 0.75,
             eyeHover: 0.23,
             eyeX: 0.31,
-            eyeY: 1.53,
+            eyeY: 1.53, 
             bodyDepth: 0.25, 
             wingTaper: 0.85, 
-            tailCount: 20,   
-            isPaused: false,
-            baseColor: '#ffffff',
-            eyeColor: '#ed0707', 
-            tailColor: '#0e3a66', 
-            wireframe: false
+            tailCount: 22,   
+            darkBase: '#ef0101', 
+            lightBase: '#0e3a66',
+            eyeColor: '#3928b8',  
+            tailColor: '#0e5167',
+            particleCount: 1500
         };
 
-        function init() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000a1a);
-            camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // ประหยัดแบตมือถือโดยจำกัด pixel ratio
-            document.body.appendChild(renderer.domElement);
-            
-            const ambient = new THREE.AmbientLight(0xffffff, 1.2); 
-            scene.add(ambient);
-            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
-            sun.position.set(5, 10, 7);
-            scene.add(sun);
+        let scene, camera, renderer, composer, bloomPass, rayInstances = [];
+        let sharedMaterial, eyeMaterial, tailMaterial, floorMaterial;
+        let spotLight, sunLight, ambientLight, hemiLight, marineSnow;
+        
+        // Input Variables
+        let mouse = new THREE.Vector2(0, 0);
+        let targetRotation = new THREE.Vector2(0, 0);
+        let currentRotation = new THREE.Vector2(0, 0);
+        let targetZoom = 100;
+        let currentZoom = 100;
+        let lastTimestamp = 0;
+        let isDarkMode = true;
+        let darkTexture, lightTexture;
 
-            createStingray();
-            updateCameraPosition();
-            setupInteractions();
-            setupGUI();
+        // Touch handling
+        let touchStartDist = 0;
+        let isTouching = false;
+        let lastTouchPos = new THREE.Vector2();
 
-            window.addEventListener('resize', onResize);
-            requestAnimationFrame(animate);
-        }
-
-        // --- ระบบ Texture และโมเดล (เหมือนเดิม) ---
-        function createPolimaxxTexture(color = '#ffffff') {
+        function createPolimaxxTexture(baseColor, isLightMode = false) {
             const canvas = document.createElement('canvas');
             canvas.width = 2048; canvas.height = 1024;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = color; 
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#f37021'; ctx.fillRect(0, 0, 2048, 60); 
-            ctx.fillStyle = '#0e3a66'; ctx.fillRect(0, 964, 2048, 60);
+            const brandBlue = '#0e3a66', brandOrange = '#f37021';
+            
+            ctx.fillStyle = baseColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = brandOrange; ctx.fillRect(0, 0, 2048, 60); 
+            ctx.fillStyle = isLightMode ? '#0a2a4d' : brandBlue; ctx.fillRect(0, 964, 2048, 60);
+            
             const drawLogoSet = (offsetX, isMirror = false) => {
                 ctx.save();
                 ctx.translate(offsetX + 512, 512);
                 if (isMirror) ctx.scale(-1, 1);
                 ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 42px Arial'; ctx.fillText('POLIMAXX', 0, -140);
-                ctx.fillStyle = '#f37021'; ctx.font = '900 210px Arial'; ctx.fillText('PP', 0, -10);
-                ctx.fillStyle = '#0e3a66'; ctx.font = 'bold 36px Arial'; ctx.fillText('POLYETHYLENE', 0, 100);
-                ctx.fillStyle = '#666666'; ctx.font = 'bold 30px Arial'; ctx.fillText('NET WEIGHT 25 KG', 0, 180);
+                ctx.fillStyle = "#ffffff"; ctx.font = 'bold 44px Arial'; ctx.fillText('POLIMAXX', 0, -145);
+                ctx.fillStyle = brandOrange; ctx.font = '900 220px Arial'; ctx.fillText('PP', 0, -10);
+                ctx.fillStyle = "#ffffff"; ctx.font = 'bold 38px Arial'; ctx.fillText('POLYETHYLENE', 0, 105);
                 ctx.restore();
             };
             drawLogoSet(0, false); drawLogoSet(1024, true); 
-            return new THREE.CanvasTexture(canvas);
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.anisotropy = 16;
+            return tex;
         }
 
-        function createStingray() {
-            const shape = new THREE.Shape();
-            shape.moveTo(0, 1.8); 
-            shape.bezierCurveTo(1.7, 1.6, 2.7, 0.8, 2.7, 0); 
-            shape.bezierCurveTo(2.7, -0.8, 1.4, -1.6, 0, -1.8); 
-            shape.bezierCurveTo(-1.4, -1.6, -2.7, -0.8, -2.7, 0); 
-            shape.bezierCurveTo(-2.7, 0.8, -1.7, 1.6, 0, 1.8);
-
-            const extrudeSettings = { depth: config.bodyDepth, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.25, bevelSegments: 15 };
-            const geometry = new THREE.ExtrudeBufferGeometry(shape, extrudeSettings);
-            const pos = geometry.attributes.position;
-            const uvs = geometry.attributes.uv;
-            for (let i = 0; i < pos.count; i++) {
-                const x = pos.getX(i), y = pos.getY(i), pz = pos.getZ(i);
-                if (pz >= config.bodyDepth + 0.1) uvs.setXY(i, (x / 5.4 * 0.45) + 0.25, (y / 3.6 * 0.45) + 0.5);
-                else if (pz <= -0.1) uvs.setXY(i, (x / 5.4 * 0.45) + 0.75, (y / 3.6 * 0.45) + 0.5);
-                else uvs.setXY(i, 0.5, (pz > config.bodyDepth / 2) ? 0.03 : 0.97);
+        class Stingray {
+            constructor() {
+                this.group = new THREE.Group();
+                this.animTime = Math.random() * 100;
+                this.moveSpeed = config.minSpeed + Math.random() * (config.maxSpeed - config.minSpeed);
+                const angle = Math.random() * Math.PI * 2;
+                this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.2, Math.sin(angle)).normalize();
+                this.targetDirection = this.direction.clone();
+                this.group.position.set((Math.random()-0.5)*100, 20 + Math.random()*40, (Math.random()-0.5)*100);
+                this.changeTargetTime = 0;
+                this.currentRoll = 0; 
+                this.initMesh();
+                scene.add(this.group);
             }
-            initialPositions = new Float32Array(pos.array);
-            const material = new THREE.MeshStandardMaterial({ map: createPolimaxxTexture(config.baseColor), roughness: 0.4, metalness: 0.1, wireframe: config.wireframe });
-            stingrayMesh = new THREE.Mesh(geometry, material);
-            stingrayMesh.rotation.x = -Math.PI / 2;
-            scene.add(stingrayMesh);
 
-            const eyeGeo = new THREE.SphereBufferGeometry(0.1, 16, 16);
-            const eyeMat = new THREE.MeshPhongMaterial({ color: config.eyeColor, shininess: 80 });
-            eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-            stingrayMesh.add(eyeL); stingrayMesh.add(eyeR);
-            stingrayMesh.add(tailGroup);
-            rebuildTail();
-        }
-
-        function rebuildTail() {
-            while(tailGroup.children.length > 0) tailGroup.remove(tailGroup.children[0]);
-            tailSegments = [];
-            const tailMaterial = new THREE.MeshStandardMaterial({ color: config.tailColor, wireframe: config.wireframe });
-            let lastSegment = null; const segmentLength = 0.2;
-            for (let i = 0; i < config.tailCount; i++) {
-                const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
-                const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, segmentLength, 8);
-                segGeo.translate(0, -segmentLength / 2, 0); 
-                const segment = new THREE.Mesh(segGeo, tailMaterial);
-                if (i === 0) { segment.position.set(0, -1.8, 0.12); tailGroup.add(segment); }
-                else { segment.position.set(0, -segmentLength, 0); lastSegment.add(segment); }
-                tailSegments.push(segment); lastSegment = segment;
-            }
-        }
-
-        function getWaveHeight(x, y, time) {
-            const dist = Math.abs(x);
-            const bodyCore = 0.5;
-            const wave = dist * 2.0 - y * 0.5;
-            let intensity = (dist <= bodyCore) ? (dist * 0.1) : (dist - bodyCore) * 1.0;
-            return Math.sin(time + wave) * 0.3 * intensity * config.flapStrength;
-        }
-
-        // --- ระบบควบคุมระดับสูง (Advanced Controls) ---
-        function setupInteractions() {
-            const el = renderer.domElement;
-
-            // Pointer Events รองรับทั้ง Mouse และ Touch
-            el.addEventListener('pointerdown', (e) => {
-                isPointerDown = true;
-                pointerPos = { x: e.clientX, y: e.clientY };
-                el.setPointerCapture(e.pointerId);
-            });
-
-            window.addEventListener('pointermove', (e) => {
-                if (!isPointerDown) return;
+            initMesh() {
+                const shape = new THREE.Shape();
+                shape.moveTo(0, -1.8); shape.bezierCurveTo(1.7, -1.6, 2.7, -0.8, 2.7, 0); 
+                shape.bezierCurveTo(2.7, 0.8, 1.4, 1.6, 0, 1.8); shape.bezierCurveTo(-1.4, 1.6, -2.7, 0.8, -2.7, 0); 
+                shape.bezierCurveTo(-2.7, -0.8, -1.7, -1.6, 0, -1.8);
                 
-                // คำนวณการหมุน (Rotate)
-                const dx = e.clientX - pointerPos.x;
-                const dy = e.clientY - pointerPos.y;
-                
-                rotation.y -= dx * 0.007;
-                rotation.x -= dy * 0.007;
-                rotation.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, rotation.x));
-                
-                pointerPos = { x: e.clientX, y: e.clientY };
-                updateCameraPosition();
-            });
+                const geometry = new THREE.ExtrudeBufferGeometry(shape, { 
+                    depth: config.bodyDepth, 
+                    bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.25, bevelSegments: 15 
+                });
 
-            window.addEventListener('pointerup', (e) => {
-                isPointerDown = false;
-                lastPinchDist = 0;
-            });
-
-            // Mouse Wheel Zoom
-            el.addEventListener('wheel', (e) => {
-                zoom = Math.max(3.5, Math.min(15, zoom + e.deltaY * 0.005));
-                updateCameraPosition();
-            }, { passive: true });
-
-            // Touch Pinch Zoom (พิเศษสำหรับมือถือ)
-            el.addEventListener('touchmove', (e) => {
-                if (e.touches.length === 2) {
-                    const dist = Math.hypot(
-                        e.touches[0].pageX - e.touches[1].pageX,
-                        e.touches[0].pageY - e.touches[1].pageY
-                    );
-                    if (lastPinchDist > 0) {
-                        const diff = (lastPinchDist - dist) * 0.02;
-                        zoom = Math.max(3.5, Math.min(15, zoom + diff));
-                        updateCameraPosition();
-                    }
-                    lastPinchDist = dist;
+                const pos = geometry.attributes.position;
+                const uvs = geometry.attributes.uv;
+                for (let i = 0; i < pos.count; i++) {
+                    const x = pos.getX(i), y = pos.getY(i), pz = pos.getZ(i);
+                    if (pz >= config.bodyDepth + 0.1) uvs.setXY(i, (-x / 5.4 * 0.45) + 0.25, (-y / 3.6 * 0.45) + 0.5);
+                    else if (pz <= -0.1) uvs.setXY(i, (-x / 5.4 * 0.45) + 0.75, (-y / 3.6 * 0.45) + 0.5);
+                    else uvs.setXY(i, 0.5, (pz > config.bodyDepth / 2) ? 0.03 : 0.97);
                 }
-            }, { passive: false });
+                
+                this.initialPositions = new Float32Array(pos.array);
+                this.mesh = new THREE.Mesh(geometry, sharedMaterial);
+                this.mesh.rotation.x = -Math.PI / 2; 
+                this.group.add(this.mesh);
+
+                const eyeGeo = new THREE.SphereBufferGeometry(0.12, 16, 16);
+                this.eyeL = new THREE.Mesh(eyeGeo, eyeMaterial); 
+                this.eyeR = new THREE.Mesh(eyeGeo, eyeMaterial);
+                this.mesh.add(this.eyeL, this.eyeR);
+
+                this.tailGroup = new THREE.Group();
+                this.tailSegments = [];
+                let lastSeg = null; 
+                for (let i = 0; i < config.tailCount; i++) {
+                    const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
+                    const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, 0.22, 8);
+                    segGeo.translate(0, -0.11, 0); 
+                    const seg = new THREE.Mesh(segGeo, tailMaterial);
+                    if (i === 0) { seg.position.set(0, 1.8, 0.12); this.tailGroup.add(seg); }
+                    else { seg.position.set(0, 0.22, 0); lastSeg.add(seg); }
+                    this.tailSegments.push(seg); lastSeg = seg;
+                }
+                this.mesh.add(this.tailGroup);
+            }
+
+            update(delta) {
+                this.animTime += delta * 0.003 * config.flapSpeed;
+                const t = this.animTime;
+                
+                if (t > this.changeTargetTime) {
+                    const angle = Math.atan2(this.direction.x, this.direction.z) + (Math.random()-0.5)*Math.PI*0.5;
+                    this.targetDirection.set(Math.sin(angle), (Math.random()-0.5)*0.1, Math.cos(angle)).normalize();
+                    this.changeTargetTime = t + 10 + Math.random()*20;
+                }
+                if (this.group.position.y < 10) this.targetDirection.y += 0.02;
+                if (this.group.position.y > 60) this.targetDirection.y -= 0.02;
+                if (new THREE.Vector2(this.group.position.x, this.group.position.z).length() > config.bounds) {
+                    const toCenter = new THREE.Vector3().copy(this.group.position).negate().normalize();
+                    this.targetDirection.lerp(toCenter, 0.02).normalize();
+                }
+
+                const lastY = this.group.rotation.y;
+                const dummy = new THREE.Object3D();
+                dummy.position.copy(this.group.position);
+                dummy.lookAt(new THREE.Vector3().copy(this.group.position).add(this.targetDirection));
+                this.group.quaternion.rotateTowards(dummy.quaternion, config.turnSpeed);
+                
+                let turnDiff = this.group.rotation.y - lastY;
+                if (turnDiff > Math.PI) turnDiff -= Math.PI*2; if (turnDiff < -Math.PI) turnDiff += Math.PI*2;
+                this.currentRoll = THREE.MathUtils.lerp(this.currentRoll, -turnDiff*30, 0.05);
+                this.mesh.rotation.y = this.currentRoll; 
+                this.group.translateZ(this.moveSpeed);
+
+                const posAttr = this.mesh.geometry.attributes.position;
+                for (let i = 0; i < posAttr.count; i++) {
+                    const x = this.initialPositions[i*3], y = this.initialPositions[i*3+1], pz = this.initialPositions[i*3+2];
+                    const d = Math.abs(x);
+                    const wave = Math.sin(t + d*2.0 - y*0.5) * 0.3 * (d <= 0.4 ? d*0.1 : (d-0.4)*1.1) * config.flapStrength;
+                    posAttr.setZ(i, pz + wave);
+                }
+                posAttr.needsUpdate = true;
+                const sZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
+                const getW = (x, y) => { const d = Math.abs(x); return Math.sin(t + d*2.0 - y*0.5)*0.3*(d<=0.4?d*0.1:(d-0.4)*1.1)*config.flapStrength; };
+                this.eyeL.position.set(-config.eyeX, -config.eyeY, sZ + config.eyeHover + getW(-config.eyeX, -config.eyeY));
+                this.eyeR.position.set(config.eyeX, -config.eyeY, sZ + config.eyeHover + getW(config.eyeX, -config.eyeY));
+                this.tailSegments.forEach((seg, i) => {
+                    seg.rotation.z = Math.sin(t*0.8/config.flapSpeed - i*0.15)*0.18;
+                    seg.rotation.x = Math.cos(t*0.8/config.flapSpeed - i*0.15)*0.12;
+                });
+            }
         }
 
-        function updateCameraPosition() {
-            camera.position.set(
-                zoom * Math.sin(rotation.y) * Math.cos(rotation.x),
-                zoom * Math.sin(rotation.x),
-                zoom * Math.cos(rotation.y) * Math.cos(rotation.x)
-            );
-            camera.lookAt(0, -0.3, 0);
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color('#000308');
+            scene.fog = new THREE.FogExp2('#00050a', 0.012);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            camera.position.set(0, 5, 100);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            darkTexture = createPolimaxxTexture(config.darkBase, false);
+            lightTexture = createPolimaxxTexture(config.lightBase, true);
+
+            sharedMaterial = new THREE.MeshStandardMaterial({ 
+                map: darkTexture, roughness: 0.3, metalness: 0.1,
+                emissive: new THREE.Color(config.darkBase), emissiveIntensity: 0.15
+            });
+            eyeMaterial = new THREE.MeshPhongMaterial({ color: config.eyeColor, emissive: config.eyeColor, emissiveIntensity: 2.5, shininess: 100 });
+            tailMaterial = new THREE.MeshStandardMaterial({ color: config.tailColor, emissive: config.tailColor, emissiveIntensity: 1.2 });
+
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.1); 
+            scene.add(ambientLight);
+            hemiLight = new THREE.HemisphereLight(0x4488ff, 0x000205, 0.6);
+            scene.add(hemiLight);
+            spotLight = new THREE.SpotLight(0xffffff, 12, 300, Math.PI/6, 0.3, 1.2);
+            spotLight.position.set(0, 120, 0);
+            scene.add(spotLight);
+            sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            sunLight.position.set(50, 100, 50);
+            sunLight.visible = false;
+            scene.add(sunLight);
+
+            const pGeo = new THREE.BufferGeometry();
+            const pPos = [];
+            for (let i = 0; i < config.particleCount; i++) {
+                pPos.push((Math.random() - 0.5) * 300, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 300);
+            }
+            pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
+            marineSnow = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x88ccff, size: 0.18, transparent: true, opacity: 0.5 }));
+            scene.add(marineSnow);
+
+            floorMaterial = new THREE.MeshStandardMaterial({ color: 0x010205, roughness: 1 });
+            const floor = new THREE.Mesh(new THREE.PlaneBufferGeometry(2000, 2000), floorMaterial);
+            floor.rotation.x = -Math.PI / 2; floor.position.y = -50;
+            scene.add(floor);
+
+            composer = new THREE.EffectComposer(renderer);
+            composer.addPass(new THREE.RenderPass(scene, camera));
+            bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.2, 0.4, 0.3);
+            composer.addPass(bloomPass);
+
+            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+
+            // Listeners
+            document.getElementById('modeToggle').addEventListener('click', toggleMode);
+            window.addEventListener('resize', onResize);
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('wheel', onWheel, { passive: false });
+            
+            // Touch Events
+            window.addEventListener('touchstart', onTouchStart, { passive: false });
+            window.addEventListener('touchmove', onTouchMove, { passive: false });
+            window.addEventListener('touchend', onTouchEnd);
+
+            requestAnimationFrame(animate);
+        }
+
+        function toggleMode() {
+            isDarkMode = !isDarkMode;
+            const btn = document.getElementById('modeToggle');
+            const body = document.body;
+            if (isDarkMode) {
+                body.classList.remove('daylight-active');
+                scene.background.set('#000308'); scene.fog.color.set('#00050a'); scene.fog.density = 0.012;
+                ambientLight.intensity = 0.1; hemiLight.intensity = 0.6; sunLight.visible = false; spotLight.visible = true;
+                marineSnow.visible = true; sharedMaterial.map = darkTexture; sharedMaterial.emissive.set(config.darkBase);
+                sharedMaterial.emissiveIntensity = 0.15; floorMaterial.color.set('#010205'); bloomPass.strength = 1.2;
+                btn.innerText = "SWITCH TO SUNNY OCEAN";
+            } else {
+                body.classList.add('daylight-active');
+                scene.background.set('#0096c7'); scene.fog.color.set('#0096c7'); scene.fog.density = 0.003; 
+                ambientLight.intensity = 0.7; hemiLight.intensity = 0.4; sunLight.visible = true; spotLight.visible = false;
+                marineSnow.visible = false; sharedMaterial.map = lightTexture; sharedMaterial.emissive.set(config.lightBase);
+                sharedMaterial.emissiveIntensity = 0.02; floorMaterial.color.set('#7eb8d1'); bloomPass.strength = 0.1;
+                btn.innerText = "SWITCH TO DEEP SEA";
+            }
+            sharedMaterial.needsUpdate = true;
+        }
+
+        function onMouseMove(e) {
+            if (!isTouching) {
+                targetRotation.x = (e.clientX / window.innerWidth) * 2 - 1;
+                targetRotation.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            }
+        }
+
+        function onWheel(e) {
+            e.preventDefault();
+            targetZoom += e.deltaY * 0.05;
+            targetZoom = Math.max(40, Math.min(180, targetZoom));
+        }
+
+        function onTouchStart(e) {
+            isTouching = true;
+            if (e.touches.length === 1) {
+                lastTouchPos.set(e.touches[0].pageX, e.touches[0].pageY);
+            } else if (e.touches.length === 2) {
+                touchStartDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+            }
+        }
+
+        function onTouchMove(e) {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                const deltaX = e.touches[0].pageX - lastTouchPos.x;
+                const deltaY = e.touches[0].pageY - lastTouchPos.y;
+                targetRotation.x += deltaX * 0.005;
+                targetRotation.y -= deltaY * 0.005;
+                lastTouchPos.set(e.touches[0].pageX, e.touches[0].pageY);
+            } else if (e.touches.length === 2) {
+                const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                const delta = touchStartDist - dist;
+                targetZoom += delta * 0.2;
+                targetZoom = Math.max(40, Math.min(180, targetZoom));
+                touchStartDist = dist;
+            }
+        }
+
+        function onTouchEnd() {
+            isTouching = false;
         }
 
         function onResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-            // ปรับ Zoom อัตโนมัติเมื่อหมุนหน้าจอ (Mobile Auto-detect)
-            if (window.innerWidth < 768 && zoom < 6) zoom = 8;
-            updateCameraPosition();
+            composer.setSize(window.innerWidth, window.innerHeight);
         }
 
         function animate(timestamp) {
-            requestAnimationFrame(animate);
-            if (!lastTimestamp) lastTimestamp = timestamp;
-            const delta = timestamp - lastTimestamp;
+            const delta = timestamp - (lastTimestamp || timestamp);
             lastTimestamp = timestamp;
-            if (!config.isPaused) currentTime += delta * 0.003 * config.flapSpeed;
 
-            if (stingrayMesh) {
-                const posAttr = stingrayMesh.geometry.attributes.position;
-                for (let i = 0; i < posAttr.count; i++) {
-                    const x = initialPositions[i * 3], y = initialPositions[i * 3 + 1], z = initialPositions[i * 3 + 2];
-                    const distFromCenter = Math.abs(x);
-                    const coreWidth = 0.4;
-                    let taperScale = (distFromCenter > coreWidth) ? 1.0 - (Math.pow((distFromCenter - coreWidth) / (2.7 - coreWidth), 1.5) * config.wingTaper) : 1.0;
-                    posAttr.setZ(i, (z * taperScale) + getWaveHeight(x, y, currentTime));
-                }
-                posAttr.needsUpdate = true;
-                const surfaceBaseZ = (config.bodyDepth * (1.0 - (config.eyeX / 2.7 * config.wingTaper))) + 0.1;
-                eyeL.position.set(-config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(-config.eyeX, config.eyeY, currentTime));
-                eyeR.position.set(config.eyeX, config.eyeY, surfaceBaseZ + config.eyeHover + getWaveHeight(config.eyeX, config.eyeY, currentTime));
-                tailSegments.forEach((seg, idx) => {
-                    const delay = idx * 0.15;
-                    seg.rotation.z = Math.sin(currentTime * 0.8 - delay) * 0.15;
-                    seg.rotation.x = Math.cos(currentTime * 0.8 - delay) * 0.1;
-                });
+            rayInstances.forEach(ray => ray.update(delta));
+            if (isDarkMode) {
+                marineSnow.position.y -= 0.04;
+                if (marineSnow.position.y < -70) marineSnow.position.y = 70;
             }
-            renderer.render(scene, camera);
+
+            // Smooth Movement
+            currentRotation.x += (targetRotation.x - currentRotation.x) * 0.05;
+            currentRotation.y += (targetRotation.y - currentRotation.y) * 0.05;
+            currentZoom += (targetZoom - currentZoom) * 0.05;
+
+            camera.position.x = Math.sin(currentRotation.x * 0.8) * currentZoom;
+            camera.position.z = Math.cos(currentRotation.x * 0.8) * currentZoom;
+            camera.position.y = 5 + currentRotation.y * 30;
+            camera.lookAt(0, 20, 0);
+
+            if (isDarkMode) {
+                spotLight.position.x = currentRotation.x * 60;
+                spotLight.target.position.x = currentRotation.x * 80;
+                spotLight.target.position.z = -currentRotation.y * 50;
+            }
+
+            composer.render();
+            requestAnimationFrame(animate);
         }
 
-        function setupGUI() {
-            const gui = new GUI({ title: 'STINGRAY CONFIG' });
-            const viewFolder = gui.addFolder('Display (การแสดงผล)');
-            viewFolder.addColor(config, 'eyeColor').name('Eye Color (สีตา)').onChange(v => { eyeL.material.color.set(v); eyeR.material.color.set(v); });
-            viewFolder.addColor(config, 'baseColor').name('Body Color (สีตัว)').onChange(v => stingrayMesh.material.map = createPolimaxxTexture(v));
-            viewFolder.addColor(config, 'tailColor').name('Tail Color (สีหาง)').onChange(v => tailSegments.forEach(s => s.material.color.set(v)));
-            
-            const animFolder = gui.addFolder('Animation (แอนิเมชัน)');
-            animFolder.add(config, 'flapSpeed', 0, 2).name('Speed (ความเร็ว)');
-            animFolder.add(config, 'flapStrength', 0, 1.5).name('Strength (แรงกระพือ)');
-            animFolder.add(config, 'isPaused').name('Pause (หยุดบิน)');
-
-            viewFolder.open();
-            animFolder.open();
-        }
-
-        init();
+        window.onload = init;
     </script>
 </body>
 </html>
