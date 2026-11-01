@@ -3,13 +3,15 @@
  */
 import "./styles/main.css";
 
-import { config, envSettings } from "./config";
+import { config, envSettings, resetConfig, resetEnvSettings } from "./config";
 
 import { setupScene, handleResize, type SceneBundle } from "./scene/setupScene";
 import {
   createMaterials,
   updateBodyColor,
   updateEyeColor,
+  updateTailColor,
+  applyGlow,
   type Materials,
 } from "./scene/materials";
 import { Stingray } from "./scene/Stingray";
@@ -35,6 +37,8 @@ class App {
 
   private lastTimestamp = 0;
   private rafId = 0;
+  /** Monotonic frame counter — used to stagger normal recomputation. */
+  private frame = 0;
 
   constructor() {
     this.bundle = setupScene();
@@ -58,9 +62,16 @@ class App {
         this.modeToggle.setPreset(preset);
         this.syncGUI();
       },
+      onGridVisibilityChange: (visible) => {
+        this.environment.setGridVisible(visible);
+      },
       onBodyStructureChange: () => this.rebuildSwarm(),
       onBodyColorChange: (color) => updateBodyColor(this.materials, color),
       onEyeColorChange: (color) => updateEyeColor(this.materials, color),
+      onTailColorChange: (color) => updateTailColor(this.materials, color),
+      onGlowChange: () =>
+        applyGlow(this.materials, envSettings.preset === "Daylight"),
+      onReset: () => this.resetAll(),
     });
 
     this.buildSwarm();
@@ -72,7 +83,8 @@ class App {
 
   private buildSwarm(): void {
     for (let i = 0; i < config.count; i++) {
-      const ray = new Stingray(this.materials);
+      // Pass the rays already in the scene so the new one spawns clear of them.
+      const ray = new Stingray(this.materials, this.swarm, i);
       this.swarm.push(ray);
       this.bundle.scene.add(ray.group);
     }
@@ -86,6 +98,26 @@ class App {
     });
     this.swarm = [];
     this.buildSwarm();
+  }
+
+  /**
+   * Restores every config + environment value to its initial state and
+   * re-applies all derived effects (colors, materials, preset, swarm, GUI).
+   */
+  private resetAll(): void {
+    resetConfig();
+    resetEnvSettings();
+
+    // Derived state that was driven by the config values:
+    updateBodyColor(this.materials, config.baseColor);
+    updateEyeColor(this.materials, config.eyeColor);
+    updateTailColor(this.materials, config.tailColor);
+    this.environment.applyPreset(envSettings.preset); // also calls applyGlow()
+    this.environment.setGridVisible(envSettings.showGrid);
+    this.modeToggle.setPreset(envSettings.preset);
+    this.rebuildSwarm();
+
+    this.syncGUI();
   }
 
   // --- Lifecycle --------------------------------------------------------
@@ -115,9 +147,10 @@ class App {
       ? Math.min(timestamp - this.lastTimestamp, MAX_FRAME_DELTA_MS)
       : 0;
     this.lastTimestamp = timestamp;
+    this.frame++;
 
     for (const ray of this.swarm) {
-      ray.update(delta, this.swarm);
+      ray.update(delta, this.swarm, this.frame);
     }
 
     this.bundle.composer.render();

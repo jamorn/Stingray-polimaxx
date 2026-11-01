@@ -33,3 +33,6 @@ lerna-debug.log*
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Local scratch / reference material (temporary, not tracked)
+temp/
