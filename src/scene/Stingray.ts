@@ -21,6 +21,13 @@ import type { SwarmMember } from "../types";
 
 const WING_HALF_SPAN = 3.2;
 
+/**
+ * Upper bound on a single frame's delta (ms). Prevents a huge jump after the
+ * tab was hidden or the page was just loaded and is still compiling shaders.
+ * 50 ms ≈ 20fps — anything longer is treated as a hiccup, not real time.
+ */
+const MAX_DELTA_MS = 50;
+
 /** Spawn tuning: rays appear far out and swim inward, never spawning on top of others. */
 const SPAWN = {
   /** Horizontal radius range (world units) where new rays appear. */
@@ -83,6 +90,8 @@ export class Stingray implements SwarmMember {
   private animTime: number;
   /** Seconds remaining until the next random heading change. */
   private headingTimer = 0;
+  /** Seconds before this ray appears and starts moving (0 = spawn now). */
+  private spawnDelay = 0;
 
   constructor(
     materials: Materials,
@@ -144,6 +153,19 @@ export class Stingray implements SwarmMember {
     this.tailLen = built.tailLen;
     this.initialPositions = built.initialPositions;
     this.eyeZPos = built.eyeZPos;
+  }
+
+  /**
+   * Defers this ray's appearance and motion by `seconds`. While waiting the
+   * ray is hidden and its `update()` is a no-op, so no physics accumulates.
+   * Used to stagger the initial spawn across a few seconds, which spreads the
+   * GPU/shader cost over multiple frames and avoids a framerate dip on load.
+   */
+  setSpawnDelay(seconds: number): void {
+    this.spawnDelay = Math.max(0, seconds);
+    if (this.spawnDelay > 0) {
+      this.group.visible = false;
+    }
   }
 
   /**
@@ -387,6 +409,22 @@ export class Stingray implements SwarmMember {
   }
 
   update(delta: number, allRays: readonly SwarmMember[], frame = 0): void {
+    // Staggered spawn: stay hidden and do nothing until our turn comes.
+    // Returning early means no delta accumulates while waiting.
+    if (this.spawnDelay > 0) {
+      this.spawnDelay -= delta * 0.001;
+      if (this.spawnDelay > 0) return;
+      // Time's up — reveal and continue this frame normally.
+      this.spawnDelay = 0;
+      this.group.visible = true;
+    }
+
+    // Normalised frame time: 1.0 at 60fps, 2.0 at 30fps, 0 at the first frame.
+    // Multiplying motion and rotation by this keeps speed constant in real
+    // time, so a framerate dip (e.g. the first frames after a refresh) no
+    // longer makes rays appear to snap or warp.
+    const dtf = Math.min(delta, MAX_DELTA_MS) / (1000 / 60);
+
     // Flap animation uses its own clock (visual speed only)
     this.animTime += delta * 0.003 * config.flapSpeed * config.timeScale;
     const t = this.animTime;
@@ -447,12 +485,15 @@ export class Stingray implements SwarmMember {
       this.group.position.multiplyScalar((config.bounds * 0.98) / len);
     }
 
-    // Smoothly rotate toward the target heading
+    // Smoothly rotate toward the target heading (scaled by real frame time).
     const lastY = this.group.rotation.y;
     _dummy.position.copy(this.group.position);
     _targetPos.copy(this.group.position).add(this.targetDirection);
     _dummy.lookAt(_targetPos);
-    this.group.quaternion.rotateTowards(_dummy.quaternion, config.turnSpeed);
+    this.group.quaternion.rotateTowards(
+      _dummy.quaternion,
+      config.turnSpeed * dtf,
+    );
 
     // Banking roll proportional to recent yaw change
     let turnDiff = this.group.rotation.y - lastY;
@@ -465,9 +506,9 @@ export class Stingray implements SwarmMember {
     );
     this.mesh.rotation.y = this.currentRoll;
 
-    // Advance along the current forward axis
+    // Advance along the current forward axis (scaled by real frame time).
     this.direction.copy(this.targetDirection);
-    this.group.translateZ(this.moveSpeed);
+    this.group.translateZ(this.moveSpeed * dtf);
 
     // Flap wings (displace z per-vertex based on |x|)
     const posAttr = this.mesh.geometry.attributes

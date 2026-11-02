@@ -82,9 +82,23 @@ class App {
   // --- Swarm management -------------------------------------------------
 
   private buildSwarm(): void {
+    // Staggered spawn across a few groups so the initial load does not dump
+    // all 15 meshes + shader compiles into a single frame. Rays appear one at
+    // a time, groups offset from each other, which keeps the framerate steady
+    // from the very first second (no warping/stutter on refresh).
+    const groupCount = 3;
+    const perGroupInterval = 0.9; // seconds between successive rays in a group
+    const groupOffset = 0.3; // seconds between groups (→ one ray every 0.3s)
+
     for (let i = 0; i < config.count; i++) {
       // Pass the rays already in the scene so the new one spawns clear of them.
       const ray = new Stingray(this.materials, this.swarm, i);
+
+      const group = i % groupCount;
+      const slotInGroup = Math.floor(i / groupCount);
+      const delay = group * groupOffset + slotInGroup * perGroupInterval;
+      ray.setSpawnDelay(delay);
+
       this.swarm.push(ray);
       this.bundle.scene.add(ray.group);
     }
