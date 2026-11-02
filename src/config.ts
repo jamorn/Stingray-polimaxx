@@ -42,8 +42,8 @@ export const config: StingrayConfig = {
   tailColor: "#0e5167",
 
   // Glow — values shown in the GUI; scaled by the active preset at runtime.
-  eyeGlow: 2.0,
-  tailGlow: 1.5,
+  eyeGlow: 3.5,
+  tailGlow: 5,
 
   // Bloom
   bloomStrength: 1.5,
@@ -51,8 +51,8 @@ export const config: StingrayConfig = {
   bloomThreshold: 0.21,
 
   // Separation (boid-like avoidance)
-  separationDist: 15,
-  separationForce: 0.05,
+  separationDist: 30,
+  separationForce: 0.12,
 };
 
 /**

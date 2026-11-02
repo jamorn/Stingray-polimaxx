@@ -93,7 +93,9 @@ export class Stingray implements SwarmMember {
     this.frameOffset = index % TAIL.normalUpdateEvery;
     this.group = new THREE.Group();
     this.animTime = Math.random() * 100;
-    this.headingTimer = Math.random() * 5;
+    // Spread the first heading change across a wide window so the whole fleet
+    // doesn't re-aim on the same beat (which reads as a synchronized school).
+    this.headingTimer = Math.random() * 30;
 
     // Size distribution: mostly small, some medium, rare giants
     const rand = Math.random();
@@ -196,7 +198,10 @@ export class Stingray implements SwarmMember {
    * angle up to ±(1 - bias)·180°. This spreads rays across many headings
    * so they don't all charge the centre on the same frame.
    */
-  static findSpawnHeading(position: THREE.Vector3, bias: number): THREE.Vector3 {
+  static findSpawnHeading(
+    position: THREE.Vector3,
+    bias: number,
+  ): THREE.Vector3 {
     const clamped = Math.min(1, Math.max(0, bias));
 
     // Inward direction on the horizontal plane (falls back to -X at origin).
@@ -208,8 +213,8 @@ export class Stingray implements SwarmMember {
     // Max angular deviation from the inward heading.
     const maxDeviation = (1 - clamped) * Math.PI;
 
-    const baseAngle = Math.atan2(_inward.x, _inward.z) +
-      (Math.random() * 2 - 1) * maxDeviation;
+    const baseAngle =
+      Math.atan2(_inward.x, _inward.z) + (Math.random() * 2 - 1) * maxDeviation;
 
     return _targetPos
       .set(
@@ -386,7 +391,8 @@ export class Stingray implements SwarmMember {
     this.animTime += delta * 0.003 * config.flapSpeed * config.timeScale;
     const t = this.animTime;
 
-    // Heading changes are driven by real elapsed time
+    // Heading changes are driven by real elapsed time. Each ray keeps its own
+    // schedule so the fleet never re-aims in unison.
     this.headingTimer -= delta * 0.001;
     if (this.headingTimer <= 0) {
       const angle =
@@ -395,7 +401,8 @@ export class Stingray implements SwarmMember {
       this.targetDirection
         .set(Math.sin(angle), (Math.random() - 0.5) * 0.2, Math.cos(angle))
         .normalize();
-      this.headingTimer = 10 + Math.random() * 20;
+      // Wide, randomized interval so re-aims stay out of phase with each other.
+      this.headingTimer = 8 + Math.random() * 22;
     }
 
     // Boid separation
