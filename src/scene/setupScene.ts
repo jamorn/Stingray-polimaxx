@@ -21,6 +21,32 @@ export interface SceneBundle {
 /** Keep device pixel ratio capped so high-DPI phones don't melt. */
 const MAX_PIXEL_RATIO = 1.5;
 
+/**
+ * Bloom render-target bounds. The bloom pass allocates several full-screen
+ * render targets at its own resolution; on a 4K full-screen kiosk that is
+ * enough VRAM to make the browser drop the WebGL context. Bloom is a soft
+ * glow, so rendering it below native resolution is visually indistinguishable
+ * while cutting its memory cost dramatically.
+ */
+const MAX_BLOOM_WIDTH = 1920;
+const MAX_BLOOM_HEIGHT = 1080;
+
+/**
+ * Bloom resolution: the viewport scaled down so it never exceeds the max
+ * bounds on either axis while preserving the aspect ratio.
+ */
+function getBloomSize(): THREE.Vector2 {
+  const scale = Math.min(
+    MAX_BLOOM_WIDTH / window.innerWidth,
+    MAX_BLOOM_HEIGHT / window.innerHeight,
+    1, // never upscale — small windows keep native resolution
+  );
+  return new THREE.Vector2(
+    Math.max(1, Math.floor(window.innerWidth * scale)),
+    Math.max(1, Math.floor(window.innerHeight * scale)),
+  );
+}
+
 export function setupScene(): SceneBundle {
   // --- Scene + fog ---
   const scene = new THREE.Scene();
@@ -51,8 +77,10 @@ export function setupScene(): SceneBundle {
   document.body.appendChild(renderer.domElement);
 
   // --- Post-processing (UnrealBloom) ---
+  // Bloom renders at a capped resolution (see getBloomSize) so a large
+  // full-screen kiosk display cannot exhaust VRAM.
   const bloomPass = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    getBloomSize(),
     config.bloomStrength,
     config.bloomRadius,
     config.bloomThreshold,
@@ -96,9 +124,12 @@ export function setupScene(): SceneBundle {
 
 /** Resize handler for renderer + camera + composer. */
 export function handleResize(bundle: SceneBundle): void {
-  const { camera, renderer, composer } = bundle;
+  const { camera, renderer, composer, bloomPass } = bundle;
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
+  // Keep bloom at its capped resolution — after entering full screen the
+  // composer would otherwise reallocate large render targets.
+  bloomPass.setSize(getBloomSize().x, getBloomSize().y);
 }
