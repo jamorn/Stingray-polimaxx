@@ -46,7 +46,7 @@ export const config: StingrayConfig = {
   tailGlow: 5,
 
   // Bloom
-  bloomStrength: 1.5,
+  bloomStrength: 1.2,
   bloomRadius: 0.4,
   bloomThreshold: 0.21,
 

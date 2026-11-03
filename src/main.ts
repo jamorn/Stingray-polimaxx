@@ -26,6 +26,13 @@ import type GUI from "lil-gui";
 /** Clamp each animation frame step so tab-switching back doesn't jump. */
 const MAX_FRAME_DELTA_MS = 50;
 
+/**
+ * If the WebGL context does not come back within this window after being
+ * lost, the page reloads itself. A kiosk runs unattended for days, so a
+ * self-heal is the only way back from a permanently lost context.
+ */
+const CONTEXT_LOSS_RELOAD_MS = 10_000;
+
 class App {
   private readonly bundle: SceneBundle;
   private readonly materials: Materials;
@@ -39,6 +46,8 @@ class App {
   private rafId = 0;
   /** Monotonic frame counter — used to stagger normal recomputation. */
   private frame = 0;
+  /** Timer id for the context-loss self-heal. 0 when no loss is pending. */
+  private contextLossReloadId = 0;
 
   constructor() {
     this.bundle = setupScene();
@@ -140,7 +149,43 @@ class App {
     window.addEventListener("resize", this.onResize);
     // Pause when tab is hidden → resets delta on return.
     document.addEventListener("visibilitychange", this.onVisibilityChange);
+
+    // Kiosk self-healing: a long-running WebGL session can lose its GPU
+    // context (driver reset, VRAM pressure, compositor hiccup). Without
+    // these handlers the canvas freezes on a stale frame — which is what
+    // looked like the rays melting into spirals. preventDefault() lets the
+    // browser restore the context instead of abandoning it.
+    const canvas = this.bundle.renderer.domElement;
+    canvas.addEventListener("webglcontextlost", this.onContextLost, false);
+    canvas.addEventListener("webglcontextrestored", this.onContextRestored, false);
   }
+
+  private readonly onContextLost = (event: Event): void => {
+    // Required so the browser will attempt to restore the context.
+    event.preventDefault();
+    console.warn("[WebGL] context lost — pausing render loop");
+    cancelAnimationFrame(this.rafId);
+    this.rafId = 0;
+
+    // If restoration never happens, reload the page so the kiosk heals.
+    if (this.contextLossReloadId === 0) {
+      this.contextLossReloadId = window.setTimeout(() => {
+        console.warn("[WebGL] context not restored — reloading page");
+        window.location.reload();
+      }, CONTEXT_LOSS_RELOAD_MS);
+    }
+  };
+
+  private readonly onContextRestored = (): void => {
+    console.warn("[WebGL] context restored — resuming render loop");
+    if (this.contextLossReloadId !== 0) {
+      clearTimeout(this.contextLossReloadId);
+      this.contextLossReloadId = 0;
+    }
+    // Drop the stale timestamp so the next frame has delta = 0 (no warp).
+    this.lastTimestamp = 0;
+    if (this.rafId === 0) this.start();
+  };
 
   private readonly onResize = (): void => {
     handleResize(this.bundle);
@@ -151,6 +196,7 @@ class App {
   };
 
   private start(): void {
+    if (this.rafId !== 0) return;
     this.rafId = requestAnimationFrame(this.animate);
   }
 
@@ -179,8 +225,20 @@ class App {
 
   dispose(): void {
     cancelAnimationFrame(this.rafId);
+    if (this.contextLossReloadId !== 0) {
+      clearTimeout(this.contextLossReloadId);
+      this.contextLossReloadId = 0;
+    }
     window.removeEventListener("resize", this.onResize);
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
+
+    const canvas = this.bundle.renderer.domElement;
+    canvas.removeEventListener("webglcontextlost", this.onContextLost, false);
+    canvas.removeEventListener(
+      "webglcontextrestored",
+      this.onContextRestored,
+      false,
+    );
 
     this.swarm.forEach((ray) => {
       this.bundle.scene.remove(ray.group);
