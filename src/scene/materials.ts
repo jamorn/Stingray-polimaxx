@@ -8,16 +8,39 @@ import { createPolimaxxTexture } from "../utils/texture";
 
 export interface Materials {
   body: THREE.MeshStandardMaterial;
+  /** Additive logo overlay drawn on top of the body (see Stingray). */
+  artwork: THREE.MeshBasicMaterial;
   eye: THREE.MeshPhongMaterial;
   tail: THREE.MeshStandardMaterial;
 }
 
 export function createMaterials(): Materials {
+  const textures = createPolimaxxTexture(config.baseColor);
   const body = new THREE.MeshStandardMaterial({
-    map: createPolimaxxTexture(config.baseColor),
+    map: textures.diffuse,
+    // Self-illuminated skin: emissive colour follows the base colour while the
+    // plain `map` (not an emissiveMap) drives the luminance. Intensity is kept
+    // in `config.bodyGlow` so the red skin can glow without washing out.
+    emissive: new THREE.Color(config.baseColor),
+    emissiveIntensity: config.bodyGlow,
     roughness: 0.3,
     metalness: 0.2,
   });
+
+  // Logo glow: a white-on-black mask added on top of the skin. Additive
+  // blending means black contributes nothing, so only the lettering lights up.
+  const artwork = new THREE.MeshBasicMaterial({
+    map: textures.artworkMask,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    opacity: config.artworkGlow,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  // Ceiling for the per-instance slide pulse (see Stingray.update).
+  artwork.userData.baseOpacity = config.artworkGlow;
 
   const eye = new THREE.MeshPhongMaterial({
     color: config.eyeColor,
@@ -31,18 +54,23 @@ export function createMaterials(): Materials {
     emissive: config.tailColor,
     emissiveIntensity: config.tailGlow,
   });
-
-  return { body, eye, tail };
+  return { body, artwork, eye, tail };
 }
 
 /**
- * Replaces the body texture with a freshly generated Polimaxx one.
- * Disposes the old texture to avoid GPU memory leaks.
+ * Replaces the body textures with freshly generated Polimaxx ones.
+ * Disposes the old textures to avoid GPU memory leaks.
  */
 export function updateBodyColor(materials: Materials, color: string): void {
+  const textures = createPolimaxxTexture(color);
   materials.body.map?.dispose();
-  materials.body.map = createPolimaxxTexture(color);
+  materials.body.map = textures.diffuse;
+  materials.body.emissive.set(color);
   materials.body.needsUpdate = true;
+
+  materials.artwork.map?.dispose();
+  materials.artwork.map = textures.artworkMask;
+  materials.artwork.needsUpdate = true;
 }
 
 /**
@@ -76,4 +104,21 @@ export function applyGlow(materials: Materials, daylight: boolean): void {
   const factor = daylight ? DAYLIGHT_GLOW_FACTOR : 1.0;
   materials.eye.emissiveIntensity = config.eyeGlow * factor;
   materials.tail.emissiveIntensity = config.tailGlow * factor;
+  materials.body.emissiveIntensity = config.bodyGlow * factor;
+  // Additive overlay: opacity is the brightness control (black adds nothing).
+  // `baseOpacity` is the ceiling the per-instance slide animation pulses under.
+  const baseOpacity = Math.min(1, config.artworkGlow * factor);
+  materials.artwork.userData.baseOpacity = baseOpacity;
+  materials.artwork.opacity = baseOpacity;
+}
+
+/**
+ * Animates the artwork glow as a soft "backlit sign" breathing pulse.
+ * Driven once per frame from the main loop because the material is shared —
+ * a per-instance pulse would fight over `opacity` and flicker.
+ */
+export function updateArtworkPulse(materials: Materials, timeSeconds: number): void {
+  const base = (materials.artwork.userData.baseOpacity as number) ?? 0;
+  const slide = 0.85 + 0.15 * Math.sin(timeSeconds * 1.5);
+  materials.artwork.opacity = Math.min(1, base * slide);
 }

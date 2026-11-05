@@ -44,6 +44,10 @@ export const config: StingrayConfig = {
   // Glow — values shown in the GUI; scaled by the active preset at runtime.
   eyeGlow: 3.5,
   tailGlow: 5,
+  /** Body skin self-illumination (kept low so the red stays red). */
+  bodyGlow: 0.3,
+  /** POLIMAXX / PP / POLYETHYLENE logo glow over the wings. */
+  artworkGlow: 0.8,
 
   // Bloom
   bloomStrength: 1.2,

@@ -12,6 +12,7 @@ import {
   updateEyeColor,
   updateTailColor,
   applyGlow,
+  updateArtworkPulse,
   type Materials,
 } from "./scene/materials";
 import { Stingray } from "./scene/Stingray";
@@ -213,6 +214,9 @@ class App {
       ray.update(delta, this.swarm, this.frame);
     }
 
+    // Shared artwork breathe pulse (material is shared → drive it once here).
+    updateArtworkPulse(this.materials, timestamp * 0.001);
+
     this.bundle.composer.render();
   };
 
@@ -252,6 +256,8 @@ class App {
 
     this.materials.body.map?.dispose();
     this.materials.body.dispose();
+    this.materials.artwork.map?.dispose();
+    this.materials.artwork.dispose();
     this.materials.eye.dispose();
     this.materials.tail.dispose();
 

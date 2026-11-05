@@ -56,6 +56,10 @@ export interface StingrayConfig {
   eyeGlow: number;
   /** Tail emissive intensity at 100% (Dark). Daylight uses a fraction. */
   tailGlow: number;
+  /** Body (base colour) emissive intensity at 100% (Dark). */
+  bodyGlow: number;
+  /** Logo artwork glow opacity at 100% (Dark). */
+  artworkGlow: number;
 
   // Bloom
   bloomStrength: number;

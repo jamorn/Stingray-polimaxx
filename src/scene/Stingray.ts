@@ -315,6 +315,16 @@ export class Stingray implements SwarmMember {
     mesh.rotation.x = -Math.PI / 2;
     this.group.add(mesh);
 
+    // Logo glow overlay — same geometry (so it deforms with the flap) and
+    // drawn additively on top of the body. `depthWrite: false` + polygon
+    // offset keep it a pure additive layer with no z-fighting.
+    // NOTE: it is parented to `mesh`, so it inherits `mesh.rotation` — do NOT
+    // copy the rotation here or it gets rotated twice (and sticks up out of
+    // the body instead of lying flat on the wings).
+    const artworkMesh = new THREE.Mesh(geometry, this.materials.artwork);
+    artworkMesh.renderOrder = 1;
+    mesh.add(artworkMesh);
+
     // Eyes
     const eyeGeo = new THREE.SphereGeometry(0.12, 16, 16);
     const eyeL = new THREE.Mesh(eyeGeo, this.materials.eye);

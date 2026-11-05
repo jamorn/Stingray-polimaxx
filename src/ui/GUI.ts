@@ -89,6 +89,14 @@ export function createGUI(handlers: GUIHandlers): GUI {
     .add(config, "tailGlow", 0, 5, 0.05)
     .name("Tail Glow")
     .onChange(() => handlers.onGlowChange());
+  glowFolder
+    .add(config, "bodyGlow", 0, 3, 0.05)
+    .name("Body Glow")
+    .onChange(() => handlers.onGlowChange());
+  glowFolder
+    .add(config, "artworkGlow", 0, 3, 0.05)
+    .name("Artwork Glow")
+    .onChange(() => handlers.onGlowChange());
 
   // --- Actions — restores every value to its initial state ---
   const actions = {
