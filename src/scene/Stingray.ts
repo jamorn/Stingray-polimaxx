@@ -28,13 +28,25 @@ const WING_HALF_SPAN = 3.2;
  */
 const MAX_DELTA_MS = 50;
 
-/** Spawn tuning: rays appear far out and swim inward, never spawning on top of others. */
+/**
+ * Spawn tuning: rays appear on a shell around the centre, clear of each other.
+ *
+ * IMPORTANT: the horizontal radius must stay INSIDE `config.bounds` (80) with
+ * some margin. The old range (90–150) spawned rays *outside* the boundary, so
+ * the per-frame hard clamp (-2%/frame at the shell) fought the forward motion
+ * every frame — which read as a ray being yanked on a string for ~3s until it
+ * drifted back inside. Keeping spawns within the shell removes that fight.
+ */
 const SPAWN = {
   /** Horizontal radius range (world units) where new rays appear. */
-  minRadius: 90,
-  maxRadius: 150,
-  /** Vertical half-extent while spawning. */
-  halfHeight: 25,
+  minRadius: 50,
+  maxRadius: 70,
+  /**
+   * Vertical half-extent while spawning. Kept well within `config.bounds` (80)
+   * and much larger than before so the swarm occupies a real 3D volume instead
+   * of a flat disc — rays no longer spawn stacked on the same depth plane.
+   */
+  halfHeight: 55,
   /** How much extra clearance to demand beyond each neighbour's radius. */
   clearance: 12,
   /** Attempts to find a clear spot before falling back to "best effort". */
@@ -489,14 +501,21 @@ export class Stingray implements SwarmMember {
         .normalize();
     }
 
-    // Hard boundary: steer inward and hard-clamp just outside the shell
+    // Hard boundary: steer inward and ease back just outside the shell.
     const len = this.group.position.length();
     if (len > config.bounds * 0.9) {
       _inward.copy(this.group.position).negate().normalize();
       this.targetDirection.lerp(_inward, 0.08).normalize();
     }
     if (len > config.bounds) {
-      this.group.position.multiplyScalar((config.bounds * 0.98) / len);
+      // Pull back toward the shell rather than snapping straight onto it. A
+      // hard multiplyScalar to the shell moved the ray by the whole overshoot
+      // in one frame — a visible "jerk". Lerping 35% of the way each frame
+      // eases it back over a few frames while still guaranteeing convergence.
+      const clamped = (config.bounds * 0.98) / len;
+      this.group.position.multiplyScalar(
+        THREE.MathUtils.lerp(1, clamped, 0.35),
+      );
     }
 
     // Smoothly rotate toward the target heading (scaled by real frame time).

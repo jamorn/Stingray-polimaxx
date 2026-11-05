@@ -19,8 +19,13 @@ export const config: StingrayConfig = {
   // Motion
   flapStrength: 0.6,
   flapSpeed: 0.75,
-  /** Heading Y spread — 0.2 = near-flat, 0.5 = clear climb/dive. */
-  verticalSpread: 0.5,
+  /**
+   * Heading Y spread. The heading's Y component is drawn from
+   * ±(verticalSpread / 2), so larger values make rays climb and dive more.
+   * Raised to 0.8 so the swarm moves through a real 3D volume instead of a
+   * flat plane — rays no longer swim on one depth plane and overlap.
+   */
+  verticalSpread: 0.8,
 
   // Eyes
   eyeHover: 0.08,
