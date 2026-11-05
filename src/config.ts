@@ -19,6 +19,8 @@ export const config: StingrayConfig = {
   // Motion
   flapStrength: 0.6,
   flapSpeed: 0.75,
+  /** Heading Y spread — 0.2 = near-flat, 0.5 = clear climb/dive. */
+  verticalSpread: 0.5,
 
   // Eyes
   eyeHover: 0.08,

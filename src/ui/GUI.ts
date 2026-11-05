@@ -39,6 +39,7 @@ export function createGUI(handlers: GUIHandlers): GUI {
   const motionFolder = gui.addFolder("Stingray Motion");
   motionFolder.add(config, "flapSpeed", 0.1, 2.0).name("Flap Speed");
   motionFolder.add(config, "flapStrength", 0.1, 2.0).name("Flap Strength");
+  motionFolder.add(config, "verticalSpread", 0, 1.0, 0.01).name("Climb / Dive");
   motionFolder
     .add(config, "spawnHeadingBias", 0, 1, 0.01)
     .name("Inward Bias (spawn)")

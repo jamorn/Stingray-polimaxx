@@ -241,7 +241,7 @@ export class Stingray implements SwarmMember {
     return _targetPos
       .set(
         Math.sin(baseAngle),
-        (Math.random() - 0.5) * 0.2,
+        (Math.random() - 0.5) * config.verticalSpread,
         Math.cos(baseAngle),
       )
       .normalize()
@@ -447,7 +447,11 @@ export class Stingray implements SwarmMember {
         Math.atan2(this.direction.x, this.direction.z) +
         (Math.random() - 0.5) * Math.PI * 0.5;
       this.targetDirection
-        .set(Math.sin(angle), (Math.random() - 0.5) * 0.2, Math.cos(angle))
+        .set(
+          Math.sin(angle),
+          (Math.random() - 0.5) * config.verticalSpread,
+          Math.cos(angle),
+        )
         .normalize();
       // Wide, randomized interval so re-aims stay out of phase with each other.
       this.headingTimer = 8 + Math.random() * 22;

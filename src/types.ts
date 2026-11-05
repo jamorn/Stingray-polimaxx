@@ -24,6 +24,12 @@ export interface StingrayConfig {
   // Motion
   flapStrength: number;
   flapSpeed: number;
+  /**
+   * Vertical spread of the swim heading. The heading's Y component is drawn
+   * from ±(verticalSpread / 2), so larger values make rays climb and dive more
+   * (and let the wing-tip glow be seen from more angles).
+   */
+  verticalSpread: number;
 
   // Eyes
   eyeHover: number;
