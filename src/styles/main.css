@@ -58,7 +58,77 @@ canvas {
     background: rgba(255, 255, 255, 0.9);
 }
 
-/* --- Loading overlay — covers the canvas while shaders warm up --- */
+/* --- Control hint (bottom-right) — mouse can zoom & orbit --- */
+.control-hint {
+    position: absolute;
+    right: 20px;
+    bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 14px 8px 11px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 30px;
+    color: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    z-index: 100;
+    /* Revealed by main.ts after the loading overlay clears. */
+    opacity: 0;
+    transform: translateY(6px);
+    transition:
+        opacity 0.5s ease,
+        transform 0.5s ease,
+        background 0.3s ease,
+        color 0.3s ease;
+}
+
+.control-hint.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Gentle bobbing animation on the mouse icon to draw the eye. */
+.control-hint__icon {
+    flex: 0 0 auto;
+    animation: control-hint-bob 2.4s ease-in-out infinite;
+}
+
+.control-hint__text {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+@keyframes control-hint-bob {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-2px);
+    }
+}
+
+/* Daylight theme: dark text on light glass. */
+body.daylight-ui .control-hint {
+    background: rgba(255, 255, 255, 0.7);
+    color: #0e3a66;
+    border: 1px solid rgba(14, 58, 102, 0.3);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+}
+
+/* Hide the mouse hint on touch-only devices — it would be wrong there. */
+@media (hover: none) {
+    .control-hint {
+        display: none;
+    }
+}
+
+
 .loading-overlay {
     position: fixed;
     inset: 0;

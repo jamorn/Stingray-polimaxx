@@ -328,18 +328,22 @@ class App {
   // --- Helpers ----------------------------------------------------------
 
   /**
-   * Fades out and removes the HTML loading overlay once the scene is warm.
-   * It lives outside the render loop so the very first frame the user sees is
-   * already a fully compiled, stutter-free one.
+   * Fades out and removes the HTML loading overlay once the scene is warm, and
+   * reveals the bottom-right control hint (mouse scroll = zoom, drag = orbit)
+   * on the same beat — so the hint never appears before the scene is interactive.
    */
   private hideLoading(): void {
     const overlay = document.getElementById("loading");
-    if (!overlay) return;
-    overlay.classList.add("hidden");
-    // Remove from the DOM after the CSS fade so it never blocks pointer events.
-    overlay.addEventListener("transitionend", () => overlay.remove(), {
-      once: true,
-    });
+    if (overlay) {
+      overlay.classList.add("hidden");
+      // Remove from the DOM after the CSS fade so it never blocks pointer events.
+      overlay.addEventListener("transitionend", () => overlay.remove(), {
+        once: true,
+      });
+    }
+
+    const hint = document.getElementById("control-hint");
+    if (hint) hint.classList.add("visible");
   }
 
   /** Refresh lil-gui controllers after an external state change. */

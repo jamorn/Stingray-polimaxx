@@ -38,6 +38,9 @@ export class ModeToggle {
         this.icon.textContent = isDay ? '☀️' : '🌙';
         this.text.textContent = isDay ? 'Daylight Mode' : 'Dark Mode';
         this.button.classList.toggle('daylight-ui', isDay);
+        // Mirror the theme on <body> so other overlays (e.g. the control hint)
+        // can follow the active preset without reaching into this component.
+        document.body.classList.toggle('daylight-ui', isDay);
     }
 
     dispose(): void {
