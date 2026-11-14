@@ -72,8 +72,8 @@
 
     <script>
         const config = {
-            count: 15, 
-            bounds: 80,
+            count: 20, 
+            bounds: 160,
             minSpeed: 0.12,
             maxSpeed: 0.2,
             turnSpeed: 0.012, 
@@ -94,7 +94,7 @@
             bloomRadius: 0.4,
             bloomThreshold: 0.21,
             separationDist: 15,
-            separationForce: 0.05
+            separationForce: 0.09
         };
 
         const envSettings = {
@@ -102,8 +102,8 @@
             ambientIntensity: 1.0,
             sunIntensity: 0.8,
             rimIntensity: 1.5,
-            fogNear: 40,
-            fogFar: 150,
+            fogNear: 60,
+            fogFar: 280,
             showGrid: true,
             preset: 'Dark'
         };
@@ -114,7 +114,7 @@
         let isPaused = false;
         let isPointerDown = false, pointerPos = { x: 0, y: 0 };
         let orbitRotation = { x: 0.2, y: 0 };
-        let zoom = 110; 
+        let zoom = 200; 
         let lastTimestamp = 0;
         let gui;
 
@@ -179,7 +179,7 @@
                 const angle = Math.random() * Math.PI * 2;
                 this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.1, Math.sin(angle)).normalize();
                 this.targetDirection = this.direction.clone();
-                this.group.position.set((Math.random()-0.5)*140, (Math.random()-0.5)*50, (Math.random()-0.5)*140);
+                this.group.position.set((Math.random()-0.5)*260, (Math.random()-0.5)*160, (Math.random()-0.5)*260);
                 this.changeTargetTime = 0;
                 this.currentRoll = 0; 
                 this.initMesh();
@@ -359,8 +359,8 @@
                 envSettings.ambientIntensity = 1.0;
                 envSettings.sunIntensity = 0.8;
                 envSettings.rimIntensity = 1.5;
-                envSettings.fogNear = 40;
-                envSettings.fogFar = 150;
+                envSettings.fogNear = 60;
+                envSettings.fogFar = 280;
                 bloomPass.strength = 1.5;
                 eyeMaterial.emissiveIntensity = 2.0;
                 tailMaterial.emissiveIntensity = 1.5;
@@ -503,7 +503,7 @@
                     const pts = Array.from(touches.values());
                     const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                     const diff = initialPinchDist - currentDist;
-                    zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 30, 600);
+                    zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 40, 800);
                 }
                 
                 updateCamera();
@@ -520,7 +520,7 @@
 
             // รองรับ Wheel บน Desktop เหมือนเดิม
             el.addEventListener('wheel', e => {
-                zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 30, 600);
+                zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 40, 800);
                 updateCamera();
             }, { passive: true });
         }
