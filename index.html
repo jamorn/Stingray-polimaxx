@@ -61,7 +61,8 @@
         <span id="mode-text">Dark Mode</span>
     </button>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Single CDN (jsdelivr): three r128, examples/js/*, and lil-gui all resolve from one host -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
@@ -84,7 +85,6 @@
             eyeY: 1.50, 
             bodyDepth: 0.45, 
             wingTaper: 0.15, 
-            tailCount: 22,   
             baseColor: '#ef0101', 
             eyeColor: '#3928b8',  
             tailColor: '#0e5167',
@@ -103,9 +103,37 @@
             sunIntensity: 0.8,
             rimIntensity: 1.5,
             fogNear: 40,
-            fogFar: 370, // grid sits at y = -100; fogFar 370 keeps it clearly visible when zoomed in (must match applyPreset() Dark branch)
+            fogFar: 370, // grid sits at y = -100; fogFar 370 keeps it clearly visible when zoomed in
             showGrid: true,
             preset: 'Dark'
+        };
+
+        // Single source of truth for environment presets. applyPreset() reads from
+        // here instead of hardcoding a second copy, so the initial envSettings can
+        // never drift out of sync with the Dark preset branch.
+        const PRESETS = {
+            Dark: {
+                background: '#000810',
+                ambientIntensity: 1.0,
+                sunIntensity: 0.8,
+                rimIntensity: 1.5,
+                fogNear: 40,
+                fogFar: 370,
+                bloom: 1.5,
+                eyeEmissive: 2.0,
+                tailEmissive: 1.5
+            },
+            Daylight: {
+                background: '#88ccff',
+                ambientIntensity: 1.6,
+                sunIntensity: 1.2,
+                rimIntensity: 0.6,
+                fogNear: 100,
+                fogFar: 500,
+                bloom: 0.2,
+                eyeEmissive: 0.4,
+                tailEmissive: 0.2
+            }
         };
 
         // ============================================================
@@ -120,6 +148,13 @@
         const _lookTarget = new THREE.Vector3();
         const _dummy      = new THREE.Object3D();
 
+        // Shared geometry — size is constant across all rays, so allocate once
+        // instead of per-instance. Saves GPU memory and makes rebuild disposal
+        // simpler (only the per-instance body geometry must be freed).
+        const SHARED_EYE_GEO = new THREE.SphereGeometry(0.12, 16, 16);
+        const SHARED_TAIL_GEO = new THREE.ConeGeometry(0.06, 4.0, 8, 12);
+        SHARED_TAIL_GEO.translate(0, (4.0 / 2 + 1.8), 0);
+
         let scene, camera, renderer, composer, bloomPass, rayInstances = [];
         let ambientLight, sunLight, rimLight, gridHelper;
         let sharedMaterial, eyeMaterial, tailMaterial; 
@@ -129,6 +164,7 @@
         let zoom = 110; 
         let lastTimestamp = 0;
         let gui;
+        let pauseController = null;
 
         // live camera/fog controls bound to lil-gui (kept in sync with the
         // real `zoom` / `orbitRotation` / `scene.fog` values via onChange)
@@ -214,10 +250,13 @@
                 const baseSpeed = config.minSpeed + Math.random() * (config.maxSpeed - config.minSpeed);
                 this.moveSpeed = scale > 3 ? baseSpeed * 0.5 : baseSpeed;
 
+                // Spawn inside the bounds volume so rays don't get pushed back on
+                // the very first frame. Uses 0.7 * bounds on x/z as a safe margin.
+                const spawn = config.bounds * 0.7;
                 const angle = Math.random() * Math.PI * 2;
                 this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.1, Math.sin(angle)).normalize();
                 this.targetDirection = this.direction.clone();
-                this.group.position.set((Math.random()-0.5)*140, (Math.random()-0.5)*50, (Math.random()-0.5)*140);
+                this.group.position.set((Math.random()-0.5)*2*spawn, (Math.random()-0.5)*50, (Math.random()-0.5)*2*spawn);
                 this.changeTargetTime = 0;
                 this.currentRoll = 0; 
                 this.initMesh();
@@ -232,7 +271,7 @@
                 shape.bezierCurveTo(-1.4, 1.6, -3.2, 0.8, -3.2, 0); 
                 shape.bezierCurveTo(-3.2, -0.8, -1.7, -1.6, 0, -1.8);
 
-                const geometry = new THREE.ExtrudeBufferGeometry(shape, { 
+                const geometry = new THREE.ExtrudeGeometry(shape, { 
                     depth: config.bodyDepth, 
                     bevelEnabled: true, 
                     bevelThickness: 0.15, 
@@ -268,9 +307,8 @@
                 this.mesh.rotation.x = -Math.PI / 2; 
                 this.group.add(this.mesh);
 
-                const eyeGeo = new THREE.SphereBufferGeometry(0.12, 16, 16);
-                this.eyeL = new THREE.Mesh(eyeGeo, eyeMaterial); 
-                this.eyeR = new THREE.Mesh(eyeGeo, eyeMaterial);
+                this.eyeL = new THREE.Mesh(SHARED_EYE_GEO, eyeMaterial); 
+                this.eyeR = new THREE.Mesh(SHARED_EYE_GEO, eyeMaterial);
                 
                 const eyeDistFromCenter = config.eyeX / 3.2;
                 const eyeTaperFactor = THREE.MathUtils.lerp(1.0, config.wingTaper, eyeDistFromCenter);
@@ -284,12 +322,9 @@
                 const surfaceZ_local = (config.bodyDepth / 2) + this.eyeZPos;
                 const bodyBackZ_local = (Math.abs(bb.min.z - surfaceZ_local) > Math.abs(bb.max.z - surfaceZ_local)) ? bb.min.z : bb.max.z;
 
-                const tailLen = 4.0;
-                const tgeo = new THREE.ConeGeometry(0.06, tailLen, 8, 12);
-                tgeo.translate(0, (tailLen / 2 + 1.8), 0);
-                this.tailInitPos = new Float32Array(tgeo.attributes.position.array);
-                this.tailLen = tailLen;
-                this.tailMesh = new THREE.Mesh(tgeo, tailMaterial);
+                this.tailLen = 4.0;
+                this.tailInitPos = new Float32Array(SHARED_TAIL_GEO.attributes.position.array);
+                this.tailMesh = new THREE.Mesh(SHARED_TAIL_GEO, tailMaterial);
                 this.mesh.add(this.tailMesh);
                 this.tailMesh.position.set(0, bodyCenterY_local, bodyBackZ_local + config.tailOffsetZ);
             }
@@ -301,16 +336,13 @@
              * the left eye (-eyeX) and right eye (+eyeX) always receive the SAME
              * wave value and therefore stay visually mirrored.
              *
-             * Do NOT "optimize" the two eye lookups in update() into a single
-             * call by collapsing the sign — keep calling this for both -eyeX
-             * and +eyeX. Reasons:
-             *   1. If this formula is ever changed to depend on the signed x
-             *      (e.g. a wing tilt / asymmetric flap), the collapsed version
-             *      silently breaks the mirror symmetry.
-             *   2. Keeping two explicit calls documents the intent: eyes are
-             *      mirrored.
-             *   3. Cost is ~2 sin() calls per ray per frame (~30/frame for the
-             *      swarm), negligible next to the O(n^2) separation loop.
+             * In update() the two eyes are evaluated with TWO SEPARATE calls
+             * (getFlapWave(-eyeX) and getFlapWave(+eyeX)) rather than computing
+             * one value and sharing it. This is a deliberate future-proofing
+             * choice: if this formula ever depends on the SIGNED x (e.g. an
+             * asymmetric wing tilt), a collapsed single-call version would
+             * silently break the mirror symmetry. The extra sin() cost is
+             * negligible next to the O(n^2) separation loop.
              */
             getFlapWave(x, y, t) {
                 const d = Math.abs(x);
@@ -324,7 +356,10 @@
                 const t = this.animTime;
 
                 if (t > this.changeTargetTime) {
-                    const angle = Math.atan2(this.direction.x, this.direction.z) + (Math.random()-0.5)*Math.PI*0.5;
+                    // Wander relative to the CURRENT heading (targetDirection),
+                    // not the constructor-time direction. this.direction is kept in
+                    // sync below, but targetDirection already reflects steering.
+                    const angle = Math.atan2(this.targetDirection.x, this.targetDirection.z) + (Math.random()-0.5)*Math.PI*0.5;
                     this.targetDirection.set(Math.sin(angle), (Math.random()-0.5)*0.2, Math.cos(angle)).normalize();
                     this.changeTargetTime = t + 10 + Math.random()*20;
                 }
@@ -347,6 +382,10 @@
                     }
                 }
                 if (count > 0) {
+                    // NOTE: targetDirection is normalized right after adding the
+                    // separation vector, so `separationForce` acts as a steering
+                    // blend factor (how strongly separation skews the heading),
+                    // not as an independent physical force magnitude.
                     _sepVec.divideScalar(count);
                     this.targetDirection.add(_sepVec.multiplyScalar(config.separationForce)).normalize();
                 }
@@ -366,9 +405,20 @@
                 
                 let turnDiff = this.group.rotation.y - lastY;
                 if (turnDiff > Math.PI) turnDiff -= Math.PI*2; if (turnDiff < -Math.PI) turnDiff += Math.PI*2;
-                this.currentRoll = THREE.MathUtils.lerp(this.currentRoll, -turnDiff*30, 0.05);
+                // Frame-rate independent smoothing: matches the old fixed lerp(0.05)
+                // at 60fps while staying stable at other refresh rates.
+                const rollK = 1 - Math.pow(0.95, delta / 16.67);
+                this.currentRoll = THREE.MathUtils.lerp(this.currentRoll, -turnDiff*30, rollK);
                 this.mesh.rotation.y = this.currentRoll; 
-                this.group.translateZ(this.moveSpeed);
+
+                // Keep this.direction in sync with the actual heading, so any
+                // logic that reads it (now or later) sees the live direction.
+                this.direction.copy(this.targetDirection);
+
+                // Speed is per-second, not per-frame: base moveSpeed (~0.12–0.2)
+                // was tuned for 60fps, so multiply by delta * 0.06 to stay identical
+                // at 60fps while scaling correctly at other frame rates.
+                this.group.translateZ(this.moveSpeed * delta * 0.06);
 
                 // ---- Wing flap (skip vertex upload when flap is effectively off) ----
                 const posAttr = this.mesh.geometry.attributes.position;
@@ -381,17 +431,14 @@
                         posAttr.setZ(i, pz + wave);
                     }
                     posAttr.needsUpdate = true;
+                    // NOTE: vertex normals are NOT recomputed every frame — that is
+                    // very expensive. Lighting therefore does not track the wing
+                    // fold; acceptable for this stylized look.
                 }
                 
                 // ---- Eyes ----
-                // Eyes are placed with EXPLICIT mirror symmetry: left at -eyeX, right at
-                // +eyeX, each evaluating its own flap wave. Even though getFlapWave depends
-                // only on |x| (so both sides currently yield the same Z), we intentionally
-                // keep two separate calls instead of computing once and sharing:
-                //   - future-proofs against asymmetric flap formulas
-                //   - makes the mirror intent obvious to readers
-                //   - the extra sin() cost is negligible (see getFlapWave docstring)
-                // If you are an AI/refactor tool: DO NOT collapse these into one call.
+                // Two explicit calls (mirror symmetry). See getFlapWave docstring:
+                // keep -eyeX and +eyeX as separate evaluations.
                 const surfaceZ = (config.bodyDepth / 2) + this.eyeZPos;
                 this.eyeL.position.set(
                     -config.eyeX, -config.eyeY,
@@ -403,13 +450,15 @@
                 );
                 
                 // ---- Tail ----
+                // NOTE: tail wave uses `t` (already scaled by timeScale); timeScale is
+                // intentionally NOT multiplied again here.
                 if (this.tailMesh && this.tailInitPos && config.flapStrength > 0.001) {
                     const tailAttr = this.tailMesh.geometry.attributes.position;
                     for (let vi = 0; vi < tailAttr.count; vi++) {
                         const bx = this.tailInitPos[vi*3], by = this.tailInitPos[vi*3+1];
                         const vt = Math.max(0, (by - 1.8) / this.tailLen);
                         const amp = vt * vt;
-                        const wave = Math.sin(t * (1 + config.flapSpeed * 2.2) - vt * 6.0) * 0.55 * amp * config.flapStrength * config.timeScale;
+                        const wave = Math.sin(t * (1 + config.flapSpeed * 2.2) - vt * 6.0) * 0.55 * amp * config.flapStrength;
                         tailAttr.setX(vi, bx + wave);
                     }
                     tailAttr.needsUpdate = true;
@@ -433,33 +482,29 @@
 
         function applyPreset(v) {
             const btn = document.getElementById('mode-toggle');
+            const p = PRESETS[v] || PRESETS.Dark;
+
+            envSettings.background = p.background;
+            envSettings.ambientIntensity = p.ambientIntensity;
+            envSettings.sunIntensity = p.sunIntensity;
+            envSettings.rimIntensity = p.rimIntensity;
+            envSettings.fogNear = p.fogNear;
+            envSettings.fogFar = p.fogFar;
+
+            bloomPass.strength = p.bloom;
+            eyeMaterial.emissiveIntensity = p.eyeEmissive;
+            tailMaterial.emissiveIntensity = p.tailEmissive;
+
             if (v === 'Daylight') {
-                envSettings.background = '#88ccff';
-                envSettings.ambientIntensity = 1.6;
-                envSettings.sunIntensity = 1.2;
-                envSettings.rimIntensity = 0.6;
-                envSettings.fogNear = 100;
-                envSettings.fogFar = 500;
-                bloomPass.strength = 0.2; 
-                eyeMaterial.emissiveIntensity = 0.4;
-                tailMaterial.emissiveIntensity = 0.2;
                 document.getElementById('mode-text').innerText = 'Daylight Mode';
                 document.getElementById('mode-icon').innerText = '☀️';
                 btn.classList.add('daylight-ui');
             } else {
-                envSettings.background = '#000810';
-                envSettings.ambientIntensity = 1.0;
-                envSettings.sunIntensity = 0.8;
-                envSettings.rimIntensity = 1.5;
-                envSettings.fogNear = 40;
-                envSettings.fogFar = 370; // keep in sync with initial envSettings (grid at y = -100)
-                bloomPass.strength = 1.5;
-                eyeMaterial.emissiveIntensity = 2.0;
-                tailMaterial.emissiveIntensity = 1.5;
                 document.getElementById('mode-text').innerText = 'Dark Mode';
                 document.getElementById('mode-icon').innerText = '🌙';
                 btn.classList.remove('daylight-ui');
             }
+
             updateGridColor(v);
             scene.background.set(envSettings.background);
             scene.fog.color.set(envSettings.background);
@@ -472,6 +517,26 @@
             viewSettings.fogNear = envSettings.fogNear;
             viewSettings.fogFar = envSettings.fogFar;
             if (gui) gui.controllersRecursive().forEach(c => c.updateDisplay());
+        }
+
+        // Dispose the per-instance GPU resources of a ray before dropping it.
+        // Shared geometries/materials (SHARED_EYE_GEO, SHARED_TAIL_GEO,
+        // sharedMaterial, eyeMaterial, tailMaterial) are NOT disposed here.
+        function disposeRay(r) {
+            scene.remove(r.group);
+            if (r.mesh && r.mesh.geometry) r.mesh.geometry.dispose();
+            // r.eyeL/eyeR use SHARED_EYE_GEO, r.tailMesh uses SHARED_TAIL_GEO
+            // → do NOT dispose those shared geometries.
+        }
+
+        function rebuildRays() {
+            rayInstances.forEach(disposeRay);
+            rayInstances = [];
+            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+        }
+
+        function setPauseLabel() {
+            if (pauseController) pauseController.name(isPaused ? 'Resume (Space)' : 'Pause (Space)');
         }
 
         function initGUI() {
@@ -516,19 +581,16 @@
             motionFolder.add(config, 'flapStrength', 0.1, 2.0).name('Flap Strength');
 
             const bodyFolder = gui.addFolder('Body Structure');
-            bodyFolder.add(config, 'bodyDepth', 0.1, 1.0).name('Center Thickness').onChange(() => {
-                rayInstances.forEach(r => { scene.remove(r.group); });
-                rayInstances = [];
-                for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
-            });
-            bodyFolder.add(config, 'wingTaper', 0.05, 1.0).name('Wing Taper (Slope)').onChange(() => {
-                rayInstances.forEach(r => { scene.remove(r.group); });
-                rayInstances = [];
-                for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
-            });
+            // onFinishChange (not onChange) so the swarm is rebuilt once per drag
+            // release, not on every slider tick.
+            bodyFolder.add(config, 'bodyDepth', 0.1, 1.0).name('Center Thickness').onFinishChange(rebuildRays);
+            bodyFolder.add(config, 'wingTaper', 0.05, 1.0).name('Wing Taper (Slope)').onFinishChange(rebuildRays);
 
             const colorFolder = gui.addFolder('Stingray Appearance');
-            colorFolder.addColor(config, 'baseColor').name('Body Color').onChange(v => {
+            // onFinishChange: dragging the picker fires onChange on every tick, and
+            // each call repaints a 2048×1024 canvas + re-uploads the texture. Fire
+            // once when the drag ends instead.
+            colorFolder.addColor(config, 'baseColor').name('Body Color').onFinishChange(v => {
                 sharedMaterial.map.dispose(); sharedMaterial.map = createPolimaxxTexture(v);
             });
             colorFolder.addColor(config, 'eyeColor').name('Eye Color').onChange(v => {
@@ -536,8 +598,8 @@
             });
 
             gui.add(config, 'timeScale', 0, 2, 0.01).name('Playback Speed');
-            const pauseControl = { togglePause: () => { isPaused = !isPaused; } };
-            gui.add(pauseControl, 'togglePause').name('Pause/Resume (Space)');
+            const pauseControl = { togglePause: () => { isPaused = !isPaused; setPauseLabel(); scheduleGuiSync(); } };
+            pauseController = gui.add(pauseControl, 'togglePause').name(isPaused ? 'Resume (Space)' : 'Pause (Space)');
 
             gui.close();
         }
@@ -577,7 +639,17 @@
             setupInteractions();
             initGUI();
             setupExternalToggle();
-            window.addEventListener('keydown', (e) => { if (e.code === 'Space') { isPaused = !isPaused; e.preventDefault(); } });
+            window.addEventListener('keydown', (e) => {
+                if (e.code !== 'Space') return;
+                // Don't hijack Space while typing into a lil-gui field, or when
+                // focus is anywhere inside the GUI panel.
+                if (e.target && e.target.closest && e.target.closest('.lil-gui')) return;
+                if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+                isPaused = !isPaused;
+                setPauseLabel();
+                scheduleGuiSync();
+                e.preventDefault();
+            });
             window.addEventListener('resize', onResize);
             requestAnimationFrame(animate);
         }
@@ -595,6 +667,9 @@
 
             el.addEventListener('pointerdown', e => {
                 if(e.target.closest('.lil-gui') || e.target.closest('#mode-toggle')) return; 
+                // Only primary button (left) drives rotation; ignore right/middle so
+                // the browser context menu / middle-scroll isn't fought over.
+                if (e.button !== undefined && e.button !== 0) return;
                 
                 touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
                 pointerPos = { x: e.clientX, y: e.clientY };
@@ -630,10 +705,19 @@
             const endPointer = (e) => {
                 touches.delete(e.pointerId);
                 if (touches.size < 2) initialPinchDist = 0;
+                // If one finger of a pinch lifts, re-seed pointerPos to the remaining
+                // finger so the next drag doesn't jump by the stale gap.
+                if (touches.size === 1) {
+                    const remaining = Array.from(touches.values())[0];
+                    pointerPos = { x: remaining.x, y: remaining.y };
+                }
             };
 
             window.addEventListener('pointerup', endPointer);
             window.addEventListener('pointercancel', endPointer);
+
+            // Suppress the browser context menu so right-drag can't leave a menu open.
+            el.addEventListener('contextmenu', e => e.preventDefault());
 
             el.addEventListener('wheel', e => {
                 zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 30, 600);
@@ -673,3 +757,4 @@
     </script>
 </body>
 </html>
+
