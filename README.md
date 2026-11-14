@@ -1,202 +1,193 @@
-# README.md
+# Stingray Swarm — Polimaxx Interactive
 
-```markdown
-# Single Stingray — Swimming In Place
+A browser-based 3D scene of a swarm of stylized stingrays swimming in a bounded
+volume, built with **Three.js r128** and **[lil-gui](https://lil-gui.georgealways.com/)**.
+Rays wander, flap their wings, roll into turns, and — in the latest version —
+steer around each other using a **bat-style echolocation** model instead of
+passing straight through.
 
-A single-page WebGL simulation of a stingray hovering in place, built with **Three.js r128**. The ray flaps its wings, whips its tail, and floats gently — all driven by procedural vertex deformation (no skeletal rigging, no external models). A dark/daylight preset toggle plus a live `lil-gui` panel let you tune the look in real time.
-
-Everything lives in a single file: `singgle_stingray.html`. Open it in a modern browser and it just runs.
+No build step. Everything is a single self-contained HTML file served from a CDN.
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
-# Any static server works — or just double-click the file.
-python3 -m http.server 8000
-# → http://localhost:8000/singgle_stingray.html
+# any static server works, e.g.
+python3 -m http.server 8080
+# then open http://localhost:8080/x3.html
 ```
 
-No build step. No npm install. Three.js, the post-processing passes, and `lil-gui` are pulled from CDN at load time.
+> Why a server? Opening the file directly via `file://` usually works, but some
+> browsers restrict local script/resource loading. A tiny static server avoids
+> surprises.
 
-**Requirements:** a browser with WebGL 2 (Chrome, Edge, Firefox, Safari 15+). Mobile works too — touch orbit + pinch zoom are wired up.
-
----
-
-## Features
-
-- **Procedural wing flap** — each wing vertex is displaced by a sine wave whose amplitude grows with distance from the body center, so the spine stays rigid and the tips whip.
-- **Smooth tail whip** — a single high-resolution cone (48 height segments) bent by a smoothstep-enveloped sine wave. No visible "sausage" joints.
-- **Hovering in place** — the whole group drifts on a slow Lissajous-style path with gentle yaw / pitch / roll.
-- **Branded texture** — the body texture is generated on a `<canvas>` at runtime (POLIMAXX / PP / POLYETHYLENE / IRPC). Changing the body color rebuilds it.
-- **Dark / Daylight presets** — one click swaps background, fog, light intensities, bloom strength, grid color, and UI theme.
-- **Live GUI** — flap speed/strength, body thickness, wing taper, body color, eye color.
-- **UnrealBloom post-processing** — glow effect tunable via preset.
+The latest and recommended entry point is **`x3.html`**.
 
 ---
 
-## Controls
+## Versions
 
-### Mouse
-| Action | Effect |
-|---|---|
-| Drag | Orbit camera |
-| Scroll | Zoom (clamped 15–200) |
+| File | Lines | What it is |
+| --- | --- | --- |
+| `x.html` | 674 | Original swarm: wandering, wing flap, roll, separation. |
+| `x2.html` | 760 | "Reviewed / hardened" build: frame-rate-independent motion, GPU-safe rebuilds, shared geometry, centralized presets, UX fixes. |
+| `x3.html` | 906 | **Latest.** Everything in `x2.html` **plus bat-style echolocation** (forward-sensing avoidance + debug cones). |
 
-### Touch
-| Action | Effect |
-|---|---|
-| One-finger drag | Orbit camera |
-| Two-finger pinch | Zoom |
+Other files (`multiple-stingray*.html`, `stingray-*`, `ocean*.html`) are earlier
+experiments / prototypes kept for reference. They are not part of the main line.
 
-The top-left button toggles Dark ↔ Daylight. The bottom-left card is informational only.
+### Review notes (for context)
 
----
-
-## Project Structure
-
-```
-singgle_stingray.html
-├── <style>              — UI chrome (mode button, info card)
-├── <body>               — canvas mount + UI elements
-└── <script>
-    ├── Config            — all tunable constants (config, PRESETS, TAIL, WING_*)
-    ├── Helpers           — getBrightness, createPolimaxxTexture
-    ├── class SingleStingray
-    │   ├── _initMesh()   — body extrude + eyes + tail cone + UV setup
-    │   ├── _disposeMesh()— geometry cleanup (safe re-init)
-    │   ├── update()      — per-frame hover + wing flap + eyes
-    │   └── _updateTail() — smoothstep-weighted tail bend
-    ├── Environment       — updateGridColor, applyPreset
-    ├── GUI               — initGUI (lil-gui wiring)
-    ├── Init              — scene/renderer/lights/composer setup
-    ├── Interactions      — pointer + wheel + pinch handling
-    └── Animation loop    — animate()
-```
+- `kimi.ai.md` — review that drove the `x2.html` hardening pass.
+- `commemt1.md` — idea write-up for bat echolocation (used as a *draft*; its code
+  sample contained bugs that were fixed in `x3.html`, see below).
+- `fix.md` — misc fixes / notes.
 
 ---
 
-## Tunable Parameters
+## Features (x3.html)
 
-All live at the top of the `<script>` block. Edit them before loading, or via the GUI at runtime.
+### Scene & rendering
+- Three.js r128 via a single CDN (jsdelivr) — core + postprocessing + `lil-gui`.
+- `EffectComposer` + `RenderPass` + `UnrealBloomPass` for a soft glow.
+- `Scene.fog` tied to the background colour for depth.
+- Infinite-feeling cyan grid at `y = -100`.
+- `pixelRatio` capped at 2 for HiDPI screens.
+- **Dark** and **Daylight** environment presets (single source of truth in
+  `PRESETS`), switchable from the on-screen button or the GUI.
 
-### `config` — per-entity
-| Key | Default | Description |
-|---|---|---|
-| `flapStrength` | `0.65` | Wing + tail amplitude multiplier |
-| `flapSpeed` | `0.8` | Animation rate multiplier (linear) |
-| `eyeHover` | `0.08` | Eye lift off the wing surface |
-| `eyeX`, `eyeY` | `0.45`, `1.5` | Eye position (local units) |
-| `bodyDepth` | `0.45` | Extrude depth of the body |
-| `wingTaper` | `0.15` | Wing tip thickness ratio (1.0 = no taper) |
-| `tailLength` | `4.0` | Tail cone length (local units) |
-| `baseColor` | `#ef0101` | Body texture base (regenerated on change) |
-| `eyeColor` | `#3928b8` | Eye color + emissive |
-| `tailColor` | `#0e5167` | Tail color + emissive |
-| `scale` | `3.5` | Group scale (applied once) |
-| `bloomRadius` | `0.4` | UnrealBloom radius |
-| `bloomThreshold` | `0.21` | UnrealBloom luminance threshold |
+### Stingrays
+- Procedural body from a `Shape` + `ExtrudeGeometry`, tapered toward the wingtips.
+- Canvas-generated **Polimaxx / PP / IRON / IRPC** texture, mirrored on both wings.
+- Wing flap: per-vertex sine wave, amplitude scaling from the body outward.
+- Body roll into turns (frame-rate independent smoothing).
+- Two eyes that ride the wing surface and stay mirrored via `getFlapWave(|x|)`.
+- Whip-like tail: per-vertex sine wave with quadratic amplitude along its length.
+- Random size tiers (small / medium / large with slower speed).
+- Shared geometries (`SHARED_EYE_GEO`, `SHARED_TAIL_GEO`) → one GPU allocation
+  for all rays instead of one per ray.
 
-### `PRESETS.Dark` / `PRESETS.Daylight`
-| Key | Dark | Daylight |
-|---|---|---|
-| `background` | `#000810` | `#88ccff` |
-| `ambient` | `1.0` | `1.6` |
-| `sun` | `0.8` | `1.2` |
-| `rim` | `1.5` | `0.6` |
-| `fogNear` / `fogFar` | 40 / 150 | 60 / 300 |
-| `bloom` | `1.5` | `0.2` |
-| `eyeEmissive` | `2.0` | `0.4` |
-| `tailEmissive` | `1.5` | `0.2` |
-| `grid` | `0x00ffff` | `0x004488` |
+### Motion & steering
+- Wander: periodically picks a new heading **relative to the current heading**.
+- Bounds: steers back toward the centre when outside `config.bounds`.
+- Separation: omni-directional, close-range safety push.
+- **Bat echolocation** (new in `x3.html`):
+  - Forward-facing detection cone (`echolocationConeAngle`, `echolocationRange`).
+  - **Reciprocal rule**: steer to the opposite side of an oncoming neighbour so
+    two rays meeting head-on dodge in opposite directions.
+  - Urgency scales with `(1 - dist/range)²`.
+  - Optional wireframe cones to visualise what each ray "sees".
+- All motion is **frame-rate independent** (uses `delta`), so it looks the same
+  at 30 / 60 / 120 fps.
 
-### `TAIL`
-| Key | Default | Description |
-|---|---|---|
-| `radialSegments` | `20` | Silhouette smoothness |
-| `heightSegments` | `48` | Wave bend smoothness — keep high |
-| `rootRadius` | `0.06` | Root cone radius |
-| `waveAmplitude` | `0.45` | Peak sideways displacement at tip |
-| `waveFrequency` | `3.0` | Kinks along the tail |
-| `normalUpdateEvery` | `3` | Recompute vertex normals every N frames |
-| `speedFactor` | `2.5` | Tail oscillates faster than wings |
-
-### Feature flags
-| Flag | Default | Effect |
-|---|---|---|
-| `USE_ACES_TONEMAPPING` | `false` | Enable ACES filmic + sRGB output. Changes the look — retune `bloom` if you flip it. |
-| `WING_EDGE`, `WING_SLOPE` | `0.4`, `1.2` | Wing flap amplitude curve (`amp = (d − 0.4) × 1.2` for `d > 0.4`). |
+### Interaction
+- Drag (mouse or touch) to orbit.
+- Pinch to zoom (mobile); mouse wheel to zoom (desktop).
+- `Space` to pause / resume — **ignored while typing in a GUI input**.
+- Browser context menu suppressed on the canvas (right-drag safe).
 
 ---
 
-## How It Works
+## GUI reference
 
-### Wing deformation
-The body is an `ExtrudeBufferGeometry` from a hand-tuned `THREE.Shape` (a diamond with rounded wing tips). Each frame:
+The panel starts closed; click the title bar to open it.
 
-1. Start from a cached copy of the original vertex positions (`initialPositions`).
-2. For each vertex, compute `d = |x|` (distance from the spine).
-3. If `d ≤ WING_EDGE` (`0.4`), leave the z untouched — the spine stays flat.
-4. Otherwise apply a sine wave whose amplitude scales with `(d − WING_EDGE)`:
-   ```js
-   wave = sin(t + d * 1.8 - y * 0.5) * 0.35 * amp * flapStrength
-   ```
-5. Write directly into the typed array and set `needsUpdate` once.
+### Environment Settings
+- **Mode Preset** — `Dark` / `Daylight`. Updates background, lights, fog, bloom,
+  eye/tail emissive and the grid colour together.
 
-The typed-array access (no `getX` / `setZ` per vertex) keeps this cheap even at 60 fps.
+### Camera & Fog
+- **Camera Pitch / Yaw / Zoom** — orbit the camera.
+- **Fog Near / Far** — clamped so `near < far` is always maintained.
 
-### Tail deformation
-The tail is **one** `ConeBufferGeometry` translated so its root sits at the body's tail tip. Every frame:
+### Stingray Motion
+- **Flap Speed** — how fast the wing/tail animation runs.
+- **Flap Strength** — flap amplitude; at ~0 the per-frame vertex upload is skipped.
 
-1. For each vertex, compute `vt = (y − 1.8) / tailLen` clamped to `[0, 1]`.
-2. Apply a smoothstep envelope `amp = vt² (3 − 2·vt)` so the root is rigid and the tip whips.
-3. Displace x by `sin(tailTime − vt·freq) · amplitude · amp · flapStrength`.
-4. Recompute normals every `TAIL.normalUpdateEvery` frames (staggered) so lighting follows the whip without paying full cost per frame.
+### Bat Echolocation (x3.html)
+| Control | Meaning |
+| --- | --- |
+| **Enable** | Toggle the forward-sensing avoidance layer. |
+| **Cone Angle (rad)** | Half-angle of the detection cone (default `π/3` ≈ 60°). |
+| **Detection Range** | How far ahead a ray can "see". |
+| **Avoid Strength** | How strongly it steers away. |
+| **Show Cones** | Draw each ray's detection cone (wireframe, off by default). |
 
-### Hover motion
-The whole group drifts on a slow Lissajous path:
-```js
-position.x = sin(t·0.6·0.4) · 0.8
-position.y = sin(t·0.6)     · 1.2
-position.z = cos(t·0.6·0.3) · 0.5
-```
-Plus small yaw / pitch / roll oscillations on the group and mesh, so the ray always looks like it's "holding position" against a current.
+### Body Structure
+- **Center Thickness** — `bodyDepth`; rebuilds the swarm on drag release.
+- **Wing Taper (Slope)** — `wingTaper`; rebuilds the swarm on drag release.
 
----
+### Stingray Appearance
+- **Body Color** — repaints the canvas texture (applied on drag release to avoid
+  re-uploading a 2048×1024 texture every tick).
+- **Eye Color** — live emissive colour.
 
-## Performance Notes
-
-- **DPR is capped at 2.** `UnrealBloomPass` does multiple full-screen blurs; on 3× devices the cost is prohibitive.
-- **Geometry is disposed** on every re-init (`bodyDepth` / `wingTaper` change) and every grid rebuild (preset switch). Without this, dragging a slider would leak GPU memory.
-- **Texture regeneration** (2048×1024 canvas) uses `onFinishChange`, not `onChange` — so dragging the color picker doesn't rebuild on every intermediate frame.
-- **Per-frame delta is clamped** to 100 ms, and `lastTimestamp` resets on `visibilitychange` — prevents the animation jumping after a tab switch or long GC pause.
-- **Frustum culling is disabled** on the body and tail meshes — their vertices deform past the initial bounding sphere, so culling would cause popping at extreme camera angles.
-- **Typed-array hot loops** — both wing and tail deformation write directly into `Float32Array`s and touch `needsUpdate` once.
+### Global
+- **Playback Speed** — `timeScale`.
+- **Pause / Resume (Space)** — same as the `Space` key.
 
 ---
 
-## Known Limitations
+## How the bat echolocation works
 
-- No shadows (deliberately — the ray floats in an abstract environment).
-- The eye geometry is shared between `eyeL` and `eyeR`; dispose the shared geometry once, and both meshes are freed.
-- `flapSpeed` is now **linear** across hover, wings, and tail. The previous version applied it twice to the tail, which meant slider changes felt non-linear. If you want the old tail speed, tune `TAIL.speedFactor`.
-- `USE_ACES_TONEMAPPING = true` shifts colors and bloom; retune `PRESETS.Dark.bloom` / `PRESETS.Daylight.bloom` after enabling.
+For each ray, `applyEcholocation()`:
+
+1. Builds its **forward axis** in world space (`local +Z`, matching the direction
+   the body actually moves).
+2. Skips neighbours that are too far or outside the cone
+   (`dot(forward, toNeighbour) < cos(coneAngle)`).
+3. Decides which side the neighbour is on with `cross(forward, toNeighbour).y`.
+4. Steers to the **opposite** side (reciprocal rule), so head-on pairs separate.
+5. Accumulates steering weighted by `strength * (1 - dist/range)²`.
+
+All of this uses **preallocated scratch vectors** — no per-frame allocations.
+
+### Fixed vs the `commemt1.md` draft
+The draft's code had several problems; `x3.html` corrects them:
+
+- **Forward axis** was `(0,0,-1)`; rays move along `+Z`, so the cone pointed
+  backward. Fixed to `(0,0,1)`.
+- **Per-frame allocations** (`new THREE.Vector3()` inside the pair loop) caused
+  GC hitches. Replaced with shared scratch vectors.
+- The draft **reused `_lookTarget`** for the forward vector, clobbering a value
+  that bounds-steering still needed. Echolocation now uses its own scratch set.
+- **Side-choice jitter** when a neighbour is dead ahead (`cross.y ≈ 0`). Added an
+  epsilon guard + deterministic tie-break.
+- Debug cone is **per-instance** and properly `dispose()`d on rebuild.
 
 ---
 
-## Credits
+## Architecture / code map (x3.html)
 
-- **Three.js** (r128) — https://threejs.org
-- **lil-gui** — https://lil-gui.georgealways.com
-- Body texture, wing/tail animation, and all tuning hand-built for this demo.
+| Area | Location (approx.) |
+| --- | --- |
+| `config` (all tunables) | top of the inline script |
+| `envSettings` + `PRESETS` | after `config` |
+| Scratch vectors | before `class Stingray` |
+| Shared geometries | before `class Stingray` |
+| `class Stingray` — construction, `initMesh`, debug cone | middle |
+| `class Stingray` — `update()` (wander, separation, bounds, flap) | middle |
+| `applyEcholocation()` | end of `class Stingray` |
+| `applyPreset()` / `disposeRay()` / `rebuildRays()` | after the class |
+| `initGUI()` | after helpers |
+| `init()` / interactions / `updateCamera()` / `animate()` | bottom |
+
+Key patterns to preserve when editing:
+- **`onFinishChange`** for anything expensive (rebuild, texture repaint).
+- **Dispose per-instance geometry** in `disposeRay()`; never dispose the shared
+  eye/tail geometries.
+- **Reuse scratch vectors**; don't allocate inside per-frame loops.
+- Keep `this.direction` and `this.targetDirection` in sync each frame.
 
 ---
 
-## License
+## Tech notes & caveats
 
-MIT — do what you want with it.
-```
-
----
-
-ถ้าอยากให้ผมปรับ section ไหนเพิ่ม (เช่นใส่ภาพ screenshot placeholder, ใส่ changelog, หรือเขียนเป็นภาษาไทยด้วย) บอกได้เลยครับ
+- **Three.js r128** is pinned. Moving to a newer major may require replacing
+  `examples/js/*` script tags with ES modules.
+- `*Geometry` names (not `*BufferGeometry`) are used; in r128 they are aliases,
+  so behaviour is identical but there are no deprecation warnings.
+- Vertex normals are **not** recomputed each frame during the wing flap — lighting
+  doesn't track the fold. This is a deliberate performance/stylization trade-off.
+- The scene is bounded; rays are steered inward rather than using a hard wall.
