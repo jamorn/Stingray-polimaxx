@@ -88,6 +88,8 @@
             baseColor: '#ef0101', 
             eyeColor: '#3928b8',  
             tailColor: '#0e5167',
+            timeScale: 1.0,
+            tailOffsetZ: 0.48, // -.16 ,0.32
             bloomStrength: 1.5,
             bloomRadius: 0.4,
             bloomThreshold: 0.21,
@@ -109,6 +111,7 @@
         let scene, camera, renderer, composer, bloomPass, rayInstances = [];
         let ambientLight, sunLight, rimLight, gridHelper;
         let sharedMaterial, eyeMaterial, tailMaterial; 
+        let isPaused = false;
         let isPointerDown = false, pointerPos = { x: 0, y: 0 };
         let orbitRotation = { x: 0.2, y: 0 };
         let zoom = 110; 
@@ -237,23 +240,25 @@
 
                 this.mesh.add(this.eyeL, this.eyeR);
 
-                this.tailGroup = new THREE.Group();
-                this.tailSegments = [];
-                let lastSeg = null; 
-                for (let i = 0; i < config.tailCount; i++) {
-                    const radius = 0.06 * (1 - (i / config.tailCount)) + 0.005;
-                    const segGeo = new THREE.CylinderBufferGeometry(radius * 0.8, radius, 0.22, 8);
-                    segGeo.translate(0, -0.11, 0); 
-                    const seg = new THREE.Mesh(segGeo, tailMaterial);
-                    if (i === 0) { seg.position.set(0, 1.8, config.bodyDepth/2); this.tailGroup.add(seg); }
-                    else { seg.position.set(0, 0.22, 0); lastSeg.add(seg); }
-                    this.tailSegments.push(seg); lastSeg = seg;
-                }
-                this.mesh.add(this.tailGroup);
+                // create a single cone tail (animate vertices) — matches stingray-single-init-test.html
+                geometry.computeBoundingBox();
+                const bb = geometry.boundingBox;
+                const bodyCenterY_local = (bb.min.y + bb.max.y) * 0.5;
+                const surfaceZ_local = (config.bodyDepth / 2) + this.eyeZPos;
+                const bodyBackZ_local = (Math.abs(bb.min.z - surfaceZ_local) > Math.abs(bb.max.z - surfaceZ_local)) ? bb.min.z : bb.max.z;
+
+                const tailLen = 4.0;
+                const tgeo = new THREE.ConeGeometry(0.06, tailLen, 8, 12);
+                tgeo.translate(0, (tailLen / 2 + 1.8), 0);
+                this.tailInitPos = new Float32Array(tgeo.attributes.position.array);
+                this.tailLen = tailLen;
+                this.tailMesh = new THREE.Mesh(tgeo, tailMaterial);
+                this.mesh.add(this.tailMesh);
+                this.tailMesh.position.set(0, bodyCenterY_local, bodyBackZ_local + config.tailOffsetZ);
             }
 
             update(delta, allRays) {
-                this.animTime += delta * 0.003 * config.flapSpeed;
+                this.animTime += delta * 0.003 * config.flapSpeed * config.timeScale;
                 const t = this.animTime;
 
                 if (t > this.changeTargetTime) {
@@ -312,10 +317,17 @@
                 this.eyeL.position.set(-config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(-config.eyeX, -config.eyeY));
                 this.eyeR.position.set(config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(config.eyeX, -config.eyeY));
                 
-                this.tailSegments.forEach((seg, i) => {
-                    seg.rotation.z = Math.sin(t*0.8/config.flapSpeed - i*0.15)*0.18;
-                    seg.rotation.x = Math.cos(t*0.8/config.flapSpeed - i*0.15)*0.12;
-                });
+                if (this.tailMesh && this.tailInitPos) {
+                    const tailAttr = this.tailMesh.geometry.attributes.position;
+                    for (let vi = 0; vi < tailAttr.count; vi++) {
+                        const bx = this.tailInitPos[vi*3], by = this.tailInitPos[vi*3+1];
+                        const vt = Math.max(0, (by - 1.8) / this.tailLen);
+                        const amp = vt * vt;
+                        const wave = Math.sin(t * (1 + config.flapSpeed * 2.2) - vt * 6.0) * 0.55 * amp * config.flapStrength * config.timeScale;
+                        tailAttr.setX(vi, bx + wave);
+                    }
+                    tailAttr.needsUpdate = true;
+                }
             }
         }
 
@@ -398,6 +410,11 @@
                 eyeMaterial.color.set(v); eyeMaterial.emissive.set(v);
             });
 
+            // Playback controls
+            gui.add(config, 'timeScale', 0, 2, 0.01).name('Playback Speed');
+            const pauseControl = { togglePause: () => { isPaused = !isPaused; } };
+            gui.add(pauseControl, 'togglePause').name('Pause/Resume (Space)');
+
             gui.close();
         }
 
@@ -436,6 +453,8 @@
             setupInteractions();
             initGUI();
             setupExternalToggle();
+            // spacebar toggle for pause/resume
+            window.addEventListener('keydown', (e) => { if (e.code === 'Space') { isPaused = !isPaused; e.preventDefault(); } });
             window.addEventListener('resize', onResize);
             requestAnimationFrame(animate);
         }
@@ -525,7 +544,7 @@
             requestAnimationFrame(animate);
             const delta = timestamp - (lastTimestamp || timestamp);
             lastTimestamp = timestamp;
-            rayInstances.forEach(ray => ray.update(delta, rayInstances));
+            if (!isPaused) rayInstances.forEach(ray => ray.update(delta, rayInstances));
             composer.render();
         }
 
