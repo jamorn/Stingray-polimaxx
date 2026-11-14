@@ -339,7 +339,7 @@
             if (gridHelper) scene.remove(gridHelper);
             const gridColor = (preset === 'Dark') ? 0x00ffff : 0x004488;
             gridHelper = new THREE.GridHelper(500, 50, gridColor, gridColor);
-            gridHelper.position.y = -60;
+            gridHelper.position.y = -160;
             if(envSettings.showGrid) scene.add(gridHelper);
         }
 
