@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Stingray Swarm - Polimaxx Interactive Env</title>
+    <title>Stingray Swarm - Polimaxx Interactive</title>
     <style>
         body { 
             margin: 0; 
             background: #00050a; 
             overflow: hidden; 
             font-family: 'Segoe UI', Tahoma, sans-serif; 
-            touch-action: none; /* ป้องกันการเลื่อนหน้าจอบนมือถือ */
+            touch-action: none;
             -webkit-user-select: none;
             user-select: none;
         }
@@ -72,8 +72,8 @@
 
     <script>
         const config = {
-            count: 20, 
-            bounds: 160,
+            count: 15, 
+            bounds: 80,
             minSpeed: 0.12,
             maxSpeed: 0.2,
             turnSpeed: 0.012, 
@@ -89,12 +89,12 @@
             eyeColor: '#3928b8',  
             tailColor: '#0e5167',
             timeScale: 1.0,
-            tailOffsetZ: 0.48, // -.16 ,0.32
+            tailOffsetZ: 0.48,
             bloomStrength: 1.5,
             bloomRadius: 0.4,
             bloomThreshold: 0.21,
             separationDist: 15,
-            separationForce: 0.09
+            separationForce: 0.05
         };
 
         const envSettings = {
@@ -102,25 +102,59 @@
             ambientIntensity: 1.0,
             sunIntensity: 0.8,
             rimIntensity: 1.5,
-            fogNear: 60,
-            fogFar: 280,
+            fogNear: 40,
+            fogFar: 370, // grid sits at y = -100; fogFar 370 keeps it clearly visible when zoomed in (must match applyPreset() Dark branch)
             showGrid: true,
             preset: 'Dark'
         };
+
+        // ============================================================
+        // Scratch objects reused every frame to avoid per-frame
+        // allocations (GC pressure). Shared across Stingray instances is
+        // safe because update() is called sequentially (no reentrancy).
+        // If the update loop ever becomes parallel (worker / async),
+        // move these into per-instance fields instead.
+        // ============================================================
+        const _sepVec     = new THREE.Vector3();
+        const _diff       = new THREE.Vector3();
+        const _lookTarget = new THREE.Vector3();
+        const _dummy      = new THREE.Object3D();
 
         let scene, camera, renderer, composer, bloomPass, rayInstances = [];
         let ambientLight, sunLight, rimLight, gridHelper;
         let sharedMaterial, eyeMaterial, tailMaterial; 
         let isPaused = false;
-        let isPointerDown = false, pointerPos = { x: 0, y: 0 };
+        let pointerPos = { x: 0, y: 0 };
         let orbitRotation = { x: 0.2, y: 0 };
-        let zoom = 200; 
+        let zoom = 110; 
         let lastTimestamp = 0;
         let gui;
 
-        // สำหรับ Multi-touch Zoom
+        // live camera/fog controls bound to lil-gui (kept in sync with the
+        // real `zoom` / `orbitRotation` / `scene.fog` values via onChange)
+        const viewSettings = {
+            orbitX: orbitRotation.x,
+            orbitY: orbitRotation.y,
+            zoom: zoom,
+            fogNear: envSettings.fogNear,
+            fogFar: envSettings.fogFar
+        };
+
         let initialPinchDist = 0;
         let initialZoom = 0;
+
+        // Throttle GUI refresh to at most once per animation frame — updateCamera()
+        // is called on every pointermove (60–120x/s) while dragging, and lil-gui's
+        // controllersRecursive().updateDisplay() touches the DOM per controller.
+        let _guiSyncScheduled = false;
+        function scheduleGuiSync() {
+            if (_guiSyncScheduled || !gui) return;
+            _guiSyncScheduled = true;
+            requestAnimationFrame(() => {
+                _guiSyncScheduled = false;
+                if (gui) gui.controllersRecursive().forEach(c => c.updateDisplay());
+            });
+        }
 
         function getBrightness(hexColor) {
             const rgb = parseInt(hexColor.replace('#', ''), 16);
@@ -151,10 +185,6 @@
                 ctx.fillStyle = textColor; ctx.font = 'bold 44px Arial'; ctx.fillText('POLIMAXX', 0, -145);
                 ctx.fillStyle = brandOrange; ctx.font = '900 220px Arial'; ctx.fillText('PP', 0, -10);
                 ctx.fillStyle = textColor; ctx.font = 'bold 38px Arial'; ctx.fillText('POLYETHYLENE', 0, 105);
-                // ── IRPC (extra line) ──
-                ctx.fillStyle = brandOrange;
-                ctx.font = "900 56px Arial";
-                ctx.fillText("IRPC", 0, 178);
                 ctx.restore();
             };
             drawLogoSet(0, false); drawLogoSet(1024, true); 
@@ -183,7 +213,7 @@
                 const angle = Math.random() * Math.PI * 2;
                 this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.1, Math.sin(angle)).normalize();
                 this.targetDirection = this.direction.clone();
-                this.group.position.set((Math.random()-0.5)*260, (Math.random()-0.5)*160, (Math.random()-0.5)*260);
+                this.group.position.set((Math.random()-0.5)*140, (Math.random()-0.5)*50, (Math.random()-0.5)*140);
                 this.changeTargetTime = 0;
                 this.currentRoll = 0; 
                 this.initMesh();
@@ -244,7 +274,6 @@
 
                 this.mesh.add(this.eyeL, this.eyeR);
 
-                // create a single cone tail (animate vertices) — matches stingray-single-init-test.html
                 geometry.computeBoundingBox();
                 const bb = geometry.boundingBox;
                 const bodyCenterY_local = (bb.min.y + bb.max.y) * 0.5;
@@ -261,6 +290,31 @@
                 this.tailMesh.position.set(0, bodyCenterY_local, bodyBackZ_local + config.tailOffsetZ);
             }
 
+            /**
+             * Flap wave Z-offset for a given local (x, y) on the wing surface.
+             *
+             * NOTE: This is a pure function of |x| (absolute value). That is why
+             * the left eye (-eyeX) and right eye (+eyeX) always receive the SAME
+             * wave value and therefore stay visually mirrored.
+             *
+             * Do NOT "optimize" the two eye lookups in update() into a single
+             * call by collapsing the sign — keep calling this for both -eyeX
+             * and +eyeX. Reasons:
+             *   1. If this formula is ever changed to depend on the signed x
+             *      (e.g. a wing tilt / asymmetric flap), the collapsed version
+             *      silently breaks the mirror symmetry.
+             *   2. Keeping two explicit calls documents the intent: eyes are
+             *      mirrored.
+             *   3. Cost is ~2 sin() calls per ray per frame (~30/frame for the
+             *      swarm), negligible next to the O(n^2) separation loop.
+             */
+            getFlapWave(x, y, t) {
+                const d = Math.abs(x);
+                return Math.sin(t + d * 1.8 - y * 0.5) * 0.35
+                     * (d <= 0.4 ? d * 0.1 : (d - 0.4) * 1.2)
+                     * config.flapStrength;
+            }
+
             update(delta, allRays) {
                 this.animTime += delta * 0.003 * config.flapSpeed * config.timeScale;
                 const t = this.animTime;
@@ -271,33 +325,40 @@
                     this.changeTargetTime = t + 10 + Math.random()*20;
                 }
 
-                const separationVec = new THREE.Vector3();
+                // ---- Separation (reuses scratch vectors, avoids sqrt via lengthSq) ----
+                _sepVec.set(0, 0, 0);
                 let count = 0;
-                for(let other of allRays) {
+                const myPos = this.group.position;
+                for (let i = 0; i < allRays.length; i++) {
+                    const other = allRays[i];
                     if (other === this) continue;
-                    const dist = this.group.position.distanceTo(other.group.position);
-                    const minDist = (this.radius + other.radius) + config.separationDist;
-                    if (dist < minDist) {
-                        const diff = new THREE.Vector3().subVectors(this.group.position, other.group.position);
-                        diff.normalize().divideScalar(Math.max(0.1, dist));
-                        separationVec.add(diff);
+                    _diff.subVectors(myPos, other.group.position);
+                    const distSq = _diff.lengthSq();
+                    const minDist = this.radius + other.radius + config.separationDist;
+                    if (distSq < minDist * minDist) {
+                        const dist = Math.sqrt(distSq);
+                        _diff.divideScalar(Math.max(0.1, dist * dist));
+                        _sepVec.add(_diff);
                         count++;
                     }
                 }
                 if (count > 0) {
-                    separationVec.divideScalar(count);
-                    this.targetDirection.add(separationVec.multiplyScalar(config.separationForce)).normalize();
+                    _sepVec.divideScalar(count);
+                    this.targetDirection.add(_sepVec.multiplyScalar(config.separationForce)).normalize();
                 }
 
-                if (this.group.position.length() > config.bounds) {
-                    this.targetDirection.lerp(new THREE.Vector3().copy(this.group.position).negate().normalize(), 0.02).normalize();
+                // ---- Bounds (reuses scratch) ----
+                if (myPos.length() > config.bounds) {
+                    _lookTarget.copy(myPos).negate().normalize();
+                    this.targetDirection.lerp(_lookTarget, 0.02).normalize();
                 }
 
+                // ---- Orientation (reuses _dummy, no per-frame Object3D) ----
                 const lastY = this.group.rotation.y;
-                const dummy = new THREE.Object3D();
-                dummy.position.copy(this.group.position);
-                dummy.lookAt(new THREE.Vector3().copy(this.group.position).add(this.targetDirection));
-                this.group.quaternion.rotateTowards(dummy.quaternion, config.turnSpeed);
+                _dummy.position.copy(myPos);
+                _lookTarget.copy(myPos).add(this.targetDirection);
+                _dummy.lookAt(_lookTarget);
+                this.group.quaternion.rotateTowards(_dummy.quaternion, config.turnSpeed);
                 
                 let turnDiff = this.group.rotation.y - lastY;
                 if (turnDiff > Math.PI) turnDiff -= Math.PI*2; if (turnDiff < -Math.PI) turnDiff += Math.PI*2;
@@ -305,23 +366,40 @@
                 this.mesh.rotation.y = this.currentRoll; 
                 this.group.translateZ(this.moveSpeed);
 
+                // ---- Wing flap (skip vertex upload when flap is effectively off) ----
                 const posAttr = this.mesh.geometry.attributes.position;
-                for (let i = 0; i < posAttr.count; i++) {
-                    const x = this.initialPositions[i*3], y = this.initialPositions[i*3+1], pz = this.initialPositions[i*3+2];
-                    const d = Math.abs(x);
-                    const flapAmp = (d <= 0.4 ? d*0.1 : (d-0.4)*1.2);
-                    const wave = Math.sin(t + d*1.8 - y*0.5) * 0.35 * flapAmp * config.flapStrength;
-                    posAttr.setZ(i, pz + wave);
+                if (config.flapStrength > 0.001) {
+                    for (let i = 0; i < posAttr.count; i++) {
+                        const x = this.initialPositions[i*3], y = this.initialPositions[i*3+1], pz = this.initialPositions[i*3+2];
+                        const d = Math.abs(x);
+                        const flapAmp = (d <= 0.4 ? d*0.1 : (d-0.4)*1.2);
+                        const wave = Math.sin(t + d*1.8 - y*0.5) * 0.35 * flapAmp * config.flapStrength;
+                        posAttr.setZ(i, pz + wave);
+                    }
+                    posAttr.needsUpdate = true;
                 }
-                posAttr.needsUpdate = true;
                 
-                const getW = (x, y) => { const d = Math.abs(x); return Math.sin(t + d*1.8 - y*0.5)*0.35*(d<=0.4?d*0.1:(d-0.4)*1.2)*config.flapStrength; };
+                // ---- Eyes ----
+                // Eyes are placed with EXPLICIT mirror symmetry: left at -eyeX, right at
+                // +eyeX, each evaluating its own flap wave. Even though getFlapWave depends
+                // only on |x| (so both sides currently yield the same Z), we intentionally
+                // keep two separate calls instead of computing once and sharing:
+                //   - future-proofs against asymmetric flap formulas
+                //   - makes the mirror intent obvious to readers
+                //   - the extra sin() cost is negligible (see getFlapWave docstring)
+                // If you are an AI/refactor tool: DO NOT collapse these into one call.
+                const surfaceZ = (config.bodyDepth / 2) + this.eyeZPos;
+                this.eyeL.position.set(
+                    -config.eyeX, -config.eyeY,
+                    surfaceZ + config.eyeHover + this.getFlapWave(-config.eyeX, -config.eyeY, t)
+                );
+                this.eyeR.position.set(
+                     config.eyeX, -config.eyeY,
+                    surfaceZ + config.eyeHover + this.getFlapWave( config.eyeX, -config.eyeY, t)
+                );
                 
-                const surfaceZ = (config.bodyDepth / 2) + this.eyeZPos; 
-                this.eyeL.position.set(-config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(-config.eyeX, -config.eyeY));
-                this.eyeR.position.set(config.eyeX, -config.eyeY, surfaceZ + config.eyeHover + getW(config.eyeX, -config.eyeY));
-                
-                if (this.tailMesh && this.tailInitPos) {
+                // ---- Tail ----
+                if (this.tailMesh && this.tailInitPos && config.flapStrength > 0.001) {
                     const tailAttr = this.tailMesh.geometry.attributes.position;
                     for (let vi = 0; vi < tailAttr.count; vi++) {
                         const bx = this.tailInitPos[vi*3], by = this.tailInitPos[vi*3+1];
@@ -336,7 +414,13 @@
         }
 
         function updateGridColor(preset) {
-            if (gridHelper) scene.remove(gridHelper);
+            if (gridHelper) {
+                scene.remove(gridHelper);
+                // Dispose old geometry/material to avoid leaking GPU resources
+                // every time the user switches Dark <-> Daylight mode.
+                gridHelper.geometry.dispose();
+                gridHelper.material.dispose();
+            }
             const gridColor = (preset === 'Dark') ? 0x00ffff : 0x004488;
             gridHelper = new THREE.GridHelper(500, 50, gridColor, gridColor);
             gridHelper.position.y = -100;
@@ -363,8 +447,8 @@
                 envSettings.ambientIntensity = 1.0;
                 envSettings.sunIntensity = 0.8;
                 envSettings.rimIntensity = 1.5;
-                envSettings.fogNear = 60;
-                envSettings.fogFar = 280;
+                envSettings.fogNear = 40;
+                envSettings.fogFar = 370; // keep in sync with initial envSettings (grid at y = -100)
                 bloomPass.strength = 1.5;
                 eyeMaterial.emissiveIntensity = 2.0;
                 tailMaterial.emissiveIntensity = 1.5;
@@ -380,6 +464,9 @@
             ambientLight.intensity = envSettings.ambientIntensity;
             sunLight.intensity = envSettings.sunIntensity;
             rimLight.intensity = envSettings.rimIntensity;
+            // sync fog sliders with the newly applied preset values
+            viewSettings.fogNear = envSettings.fogNear;
+            viewSettings.fogFar = envSettings.fogFar;
             if (gui) gui.controllersRecursive().forEach(c => c.updateDisplay());
         }
 
@@ -389,6 +476,36 @@
             
             const envFolder = gui.addFolder('Environment Settings');
             envFolder.add(envSettings, 'preset', ['Dark', 'Daylight']).name('Mode Preset').onChange(applyPreset);
+
+            // ---- Camera & Fog (live) ----
+            const camFolder = gui.addFolder('Camera & Fog');
+            camFolder.add(viewSettings, 'orbitX', -Math.PI/2 + 0.1, Math.PI/2 - 0.1, 0.01)
+                .name('Camera Pitch')
+                .onChange(v => { orbitRotation.x = v; updateCamera(); });
+            camFolder.add(viewSettings, 'orbitY', -Math.PI, Math.PI, 0.01)
+                .name('Camera Yaw')
+                .onChange(v => { orbitRotation.y = v; updateCamera(); });
+            camFolder.add(viewSettings, 'zoom', 30, 600, 1)
+                .name('Zoom')
+                .onChange(v => { zoom = v; updateCamera(); });
+            camFolder.add(viewSettings, 'fogNear', 0, 300, 1)
+                .name('Fog Near')
+                .onChange(v => {
+                    const near = Math.min(v, envSettings.fogFar - 1);
+                    envSettings.fogNear = near;
+                    viewSettings.fogNear = near;
+                    if (scene && scene.fog) scene.fog.near = near;
+                    if (near !== v) scheduleGuiSync();
+                });
+            camFolder.add(viewSettings, 'fogFar', 50, 800, 1)
+                .name('Fog Far')
+                .onChange(v => {
+                    const far = Math.max(v, envSettings.fogNear + 1);
+                    envSettings.fogFar = far;
+                    viewSettings.fogFar = far;
+                    if (scene && scene.fog) scene.fog.far = far;
+                    if (far !== v) scheduleGuiSync();
+                });
 
             const motionFolder = gui.addFolder('Stingray Motion');
             motionFolder.add(config, 'flapSpeed', 0.1, 2.0).name('Flap Speed');
@@ -414,7 +531,6 @@
                 eyeMaterial.color.set(v); eyeMaterial.emissive.set(v);
             });
 
-            // Playback controls
             gui.add(config, 'timeScale', 0, 2, 0.01).name('Playback Speed');
             const pauseControl = { togglePause: () => { isPaused = !isPaused; } };
             gui.add(pauseControl, 'togglePause').name('Pause/Resume (Space)');
@@ -430,7 +546,7 @@
             camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             document.body.appendChild(renderer.domElement);
 
             const renderScene = new THREE.RenderPass(scene, camera);
@@ -457,7 +573,6 @@
             setupInteractions();
             initGUI();
             setupExternalToggle();
-            // spacebar toggle for pause/resume
             window.addEventListener('keydown', (e) => { if (e.code === 'Space') { isPaused = !isPaused; e.preventDefault(); } });
             window.addEventListener('resize', onResize);
             requestAnimationFrame(animate);
@@ -470,7 +585,6 @@
             });
         }
 
-        // ระบบ Interaction ใหม่ที่เหมาะสมกับ Mobile/Tablet
         function setupInteractions() {
             const el = renderer.domElement;
             const touches = new Map();
@@ -479,10 +593,8 @@
                 if(e.target.closest('.lil-gui') || e.target.closest('#mode-toggle')) return; 
                 
                 touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-                isPointerDown = true;
                 pointerPos = { x: e.clientX, y: e.clientY };
                 
-                // จัดการ Pinch Zoom (Multi-touch)
                 if (touches.size === 2) {
                     const pts = Array.from(touches.values());
                     initialPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -497,17 +609,15 @@
                 touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
                 if (touches.size === 1) {
-                    // หมุนกล้อง (1 นิ้ว)
                     orbitRotation.y -= (e.clientX - pointerPos.x) * 0.005;
                     orbitRotation.x -= (e.clientY - pointerPos.y) * 0.005;
                     orbitRotation.x = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, orbitRotation.x));
                     pointerPos = { x: e.clientX, y: e.clientY };
                 } else if (touches.size === 2) {
-                    // ซูม (2 นิ้ว)
                     const pts = Array.from(touches.values());
                     const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                     const diff = initialPinchDist - currentDist;
-                    zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 40, 800);
+                    zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 30, 600);
                 }
                 
                 updateCamera();
@@ -515,16 +625,14 @@
 
             const endPointer = (e) => {
                 touches.delete(e.pointerId);
-                if (touches.size < 1) isPointerDown = false;
                 if (touches.size < 2) initialPinchDist = 0;
             };
 
             window.addEventListener('pointerup', endPointer);
             window.addEventListener('pointercancel', endPointer);
 
-            // รองรับ Wheel บน Desktop เหมือนเดิม
             el.addEventListener('wheel', e => {
-                zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 40, 800);
+                zoom = THREE.MathUtils.clamp(zoom + e.deltaY * 0.1, 30, 600);
                 updateCamera();
             }, { passive: true });
         }
@@ -536,6 +644,11 @@
                 zoom * Math.cos(orbitRotation.y) * Math.cos(orbitRotation.x)
             );
             camera.lookAt(0, 0, 0);
+            // keep GUI sliders in sync when the view is changed by drag/pinch/scroll
+            viewSettings.orbitX = orbitRotation.x;
+            viewSettings.orbitY = orbitRotation.y;
+            viewSettings.zoom = zoom;
+            scheduleGuiSync();
         }
 
         function onResize() {
