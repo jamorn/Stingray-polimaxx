@@ -94,7 +94,17 @@
             bloomRadius: 0.4,
             bloomThreshold: 0.21,
             separationDist: 15,
-            separationForce: 0.05
+            separationForce: 0.05,
+            // ---- Bat echolocation (forward-sensing reciprocal avoidance) ----
+            // Unlike the omni-directional separation term above (which only kicks
+            // in once rays are already close), this simulates a forward-facing
+            // detection cone: rays "see" neighbours ahead and steer around them.
+            enableBatEcholocation: true,
+            // Half-angle of the detection cone, in radians. PI/3 = 60 deg full cone.
+            echolocationConeAngle: Math.PI / 3,
+            echolocationRange: 30,
+            echolocationStrength: 0.08,
+            showEchoCones: false
         };
 
         const envSettings = {
@@ -147,6 +157,14 @@
         const _diff       = new THREE.Vector3();
         const _lookTarget = new THREE.Vector3();
         const _dummy      = new THREE.Object3D();
+
+        // Scratch vectors for bat echolocation. Kept separate from the ones above
+        // so the detection loop can never clobber _lookTarget, which bounds /
+        // orientation still rely on in the same update() call.
+        const _forward    = new THREE.Vector3();
+        const _cross      = new THREE.Vector3();
+        const _avoidDir   = new THREE.Vector3();
+        const _diffDir    = new THREE.Vector3();
 
         // Shared geometry — size is constant across all rays, so allocate once
         // instead of per-instance. Saves GPU memory and makes rebuild disposal
@@ -259,6 +277,7 @@
                 this.group.position.set((Math.random()-0.5)*2*spawn, (Math.random()-0.5)*50, (Math.random()-0.5)*2*spawn);
                 this.changeTargetTime = 0;
                 this.currentRoll = 0; 
+                this.echoCone = null;
                 this.initMesh();
                 scene.add(this.group);
             }
@@ -327,6 +346,36 @@
                 this.tailMesh = new THREE.Mesh(SHARED_TAIL_GEO, tailMaterial);
                 this.mesh.add(this.tailMesh);
                 this.tailMesh.position.set(0, bodyCenterY_local, bodyBackZ_local + config.tailOffsetZ);
+
+                this.initEchoCone();
+            }
+
+            // Debug visualization of the forward detection cone. It is attached to
+            // the mesh (not the group) so its local +Z lines up with the body's
+            // forward axis even though the mesh is rotated -90deg on X.
+            initEchoCone() {
+                const range = config.echolocationRange;
+                const radius = Math.tan(config.echolocationConeAngle) * range;
+                const geo = new THREE.ConeGeometry(radius, range, 24, 1, true);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: 0x00ff88, transparent: true, opacity: 0.06,
+                    wireframe: true, depthWrite: false
+                });
+                this.echoCone = new THREE.Mesh(geo, mat);
+                // ConeGeometry points +Y by default and is centered at origin, with
+                // its tip toward +Y and base toward -Y. Rotate so the tip points -Z
+                // (the body's local forward is +Z after translateZ; the detection
+                // logic treats +Z as forward, so we point the cone the same way).
+                this.echoCone.rotation.x = -Math.PI / 2;
+                this.echoCone.rotation.z = Math.PI;
+                // Push it so the tip sits at the body and it opens forward.
+                this.echoCone.position.set(0, 0, range / 2);
+                this.echoCone.visible = config.showEchoCones;
+                this.mesh.add(this.echoCone);
+            }
+
+            setEchoConeVisible(v) {
+                if (this.echoCone) this.echoCone.visible = v;
             }
 
             /**
@@ -364,7 +413,10 @@
                     this.changeTargetTime = t + 10 + Math.random()*20;
                 }
 
-                // ---- Separation (reuses scratch vectors, avoids sqrt via lengthSq) ----
+                // ---- Separation (omni-directional, close-range fallback) ----
+                // Still runs so rays never physically overlap once they are already
+                // touching; the echolocation pass below is the earlier, forward-only
+                // "see it coming" layer.
                 _sepVec.set(0, 0, 0);
                 let count = 0;
                 const myPos = this.group.position;
@@ -389,6 +441,9 @@
                     _sepVec.divideScalar(count);
                     this.targetDirection.add(_sepVec.multiplyScalar(config.separationForce)).normalize();
                 }
+
+                // ---- Bat echolocation (forward-sensing reciprocal avoidance) ----
+                if (config.enableBatEcholocation) this.applyEcholocation(allRays, myPos);
 
                 // ---- Bounds (reuses scratch) ----
                 if (myPos.length() > config.bounds) {
@@ -464,6 +519,82 @@
                     tailAttr.needsUpdate = true;
                 }
             }
+
+            /**
+             * Forward-sensing reciprocal avoidance, modelled on bat echolocation.
+             *
+             * For each neighbour inside a forward-facing cone:
+             *   1. Check it is within `echolocationRange`.
+             *   2. Check it lies within `echolocationConeAngle` of the forward axis.
+             *   3. Decide which side it is on (cross product vs forward).
+             *   4. Steer to the OPPOSITE side (reciprocal rule), so two rays meeting
+             *      head-on dodge in opposite directions instead of the same way.
+             * Urgency scales with 1 - dist/range (quadratic), so far rays barely
+             * react and near ones swerve hard.
+             *
+             * All maths uses preallocated scratch vectors — no allocation per ray,
+             * no clobbering of _lookTarget (bounds/orientation still need it).
+             *
+             * Side convention: the body's forward is local +Z (translateZ moves it
+             * toward +Z). A neighbour is "to the right" when (forward x toOther).y
+             * is NEGATIVE in a right-handed Y-up frame; we then steer LEFT (+1),
+             * and vice versa. Written so the intent is readable even if the sign
+             * convention ever flips.
+             */
+            applyEcholocation(allRays, myPos) {
+                // Forward axis in world space. (0,0,1) matches the +Z the body moves
+                // along after the -90deg mesh rotation is accounted for by the group
+                // quaternion.
+                _forward.set(0, 0, 1).applyQuaternion(this.group.quaternion).normalize();
+                const cosLimit = Math.cos(config.echolocationConeAngle);
+                let steerX = 0, steerZ = 0;   // accumulated steering (planar)
+
+                for (let i = 0; i < allRays.length; i++) {
+                    const other = allRays[i];
+                    if (other === this) continue;
+
+                    _diffDir.subVectors(other.group.position, myPos);
+                    const dist = _diffDir.length();
+                    if (dist < 0.001 || dist > config.echolocationRange) continue;
+
+                    _diffDir.multiplyScalar(1 / dist);           // unit vector to other
+                    const cosAngle = _forward.dot(_diffDir);      // within cone?
+                    if (cosAngle < cosLimit) continue;
+
+                    // Which side is the neighbour on? cross(forward, toOther).y
+                    _cross.crossVectors(_forward, _diffDir);
+                    // Guard against a near-coplanar case (cross.y ~ 0, e.g. exactly
+                    // ahead): fall back to a stable deterministic side so two rays in
+                    // the same situation don't jitter. Tie-break using the x offset.
+                    let side;
+                    if (Math.abs(_cross.y) < 1e-4) {
+                        side = (other.group.position.x >= myPos.x) ? -1 : 1;
+                    } else {
+                        // cross.y > 0  => neighbour is to the LEFT in Y-up right-handed
+                        // => steer RIGHT (+1). cross.y < 0 => steer LEFT (-1).
+                        side = (_cross.y > 0) ? 1 : -1;
+                    }
+
+                    // Perpendicular to the line-of-sight, in the XZ plane. Rotating
+                    // the horizontal part of toOther by 90deg gives a stable dodge
+                    // direction regardless of pitch.
+                    _avoidDir.set(-_diffDir.z, 0, _diffDir.x);
+                    if (_avoidDir.lengthSq() < 1e-6) continue;
+                    _avoidDir.normalize().multiplyScalar(side);
+
+                    const urgency = 1 - (dist / config.echolocationRange);
+                    const w = config.echolocationStrength * urgency * urgency;
+                    steerX += _avoidDir.x * w;
+                    steerZ += _avoidDir.z * w;
+                }
+
+                if (steerX !== 0 || steerZ !== 0) {
+                    this.targetDirection.x += steerX;
+                    this.targetDirection.z += steerZ;
+                    this.targetDirection.y += 0;      // keep altitude unchanged
+                    this.targetDirection.normalize();
+                }
+            }
         }
 
         function updateGridColor(preset) {
@@ -525,6 +656,12 @@
         function disposeRay(r) {
             scene.remove(r.group);
             if (r.mesh && r.mesh.geometry) r.mesh.geometry.dispose();
+            // The debug echo cone is per-instance, so its geometry/material must
+            // be disposed here (unlike the shared eye/tail geometries below).
+            if (r.echoCone) {
+                r.echoCone.geometry.dispose();
+                r.echoCone.material.dispose();
+            }
             // r.eyeL/eyeR use SHARED_EYE_GEO, r.tailMesh uses SHARED_TAIL_GEO
             // → do NOT dispose those shared geometries.
         }
@@ -579,6 +716,16 @@
             const motionFolder = gui.addFolder('Stingray Motion');
             motionFolder.add(config, 'flapSpeed', 0.1, 2.0).name('Flap Speed');
             motionFolder.add(config, 'flapStrength', 0.1, 2.0).name('Flap Strength');
+
+            // ---- Bat Echolocation ----
+            const echoFolder = gui.addFolder('Bat Echolocation');
+            echoFolder.add(config, 'enableBatEcholocation').name('Enable');
+            echoFolder.add(config, 'echolocationConeAngle', 0.15, Math.PI).name('Cone Angle (rad)');
+            echoFolder.add(config, 'echolocationRange', 5, 80).name('Detection Range');
+            echoFolder.add(config, 'echolocationStrength', 0, 0.3, 0.001).name('Avoid Strength');
+            echoFolder.add(config, 'showEchoCones').name('Show Cones').onChange(v => {
+                rayInstances.forEach(r => r.setEchoConeVisible(v));
+            });
 
             const bodyFolder = gui.addFolder('Body Structure');
             // onFinishChange (not onChange) so the swarm is rebuilt once per drag
@@ -757,4 +904,3 @@
     </script>
 </body>
 </html>
-
