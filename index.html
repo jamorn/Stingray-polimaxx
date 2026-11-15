@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Stingray Swarm - Polimaxx Interactive</title>
     <style>
-        body { 
-            margin: 0; 
-            background: #00050a; 
-            overflow: hidden; 
-            font-family: 'Segoe UI', Tahoma, sans-serif; 
+        body {
+            margin: 0;
+            background: #00050a;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
             touch-action: none;
             -webkit-user-select: none;
             user-select: none;
@@ -37,10 +37,10 @@
             z-index: 100;
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }
-        
+
         #mode-toggle.daylight-ui {
             background: rgba(255, 255, 255, 0.7);
-            color: #0e3a66; 
+            color: #0e3a66;
             border: 1px solid rgba(14, 58, 102, 0.3);
             box-shadow: 0 4px 15px rgba(0,0,0,0.15);
         }
@@ -72,21 +72,43 @@
     <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19"></script>
 
     <script>
+        // ============================================================
+        // ref2 — ref1 with the identified defects fixed:
+        //
+        //   [FIX 1] Tail geometry is now PER-INSTANCE. ref1 shared one
+        //           ConeGeometry, so every ray overwrote the same buffer each
+        //           frame and all tails waved in identical phase. Each ray now
+        //           owns its own tail geometry + initial positions → every tail
+        //           is independent.
+        //   [FIX 2] Delta clamp / hitch guard in animate(): a single slow frame
+        //           (shader compile, tab return) is treated as delta = 0 so rays
+        //           never warp forward trying to catch up.
+        //   [FIX 3] Pause/resume resets the frame clock so resuming never
+        //           produces a huge first delta.
+        //   [FIX 4] Pinch→single-finger drag re-seeds the pointer so the next
+        //           drag doesn't jump by the stale pinch gap.
+        //   [FIX 5] Echo-cone colour is per-ray and the cone emits from the
+        //           HEAD (not the body centre) — debug-only visual, detection
+        //           maths still centre-to-centre (unchanged).
+        //
+        // Everything else mirrors ref1's proven behaviour.
+        // ============================================================
+
         const config = {
-            count: 15, 
+            count: 15,
             bounds: 80,
             minSpeed: 0.12,
             maxSpeed: 0.2,
-            turnSpeed: 0.012, 
+            turnSpeed: 0.012,
             flapStrength: 0.6,
             flapSpeed: 0.75,
             eyeHover: 0.08,
             eyeX: 0.45,
-            eyeY: 1.50, 
-            bodyDepth: 0.45, 
-            wingTaper: 0.15, 
-            baseColor: '#ef0101', 
-            eyeColor: '#3928b8',  
+            eyeY: 1.50,
+            bodyDepth: 0.45,
+            wingTaper: 0.15,
+            baseColor: '#ef0101',
+            eyeColor: '#3928b8',
             tailColor: '#0e5167',
             timeScale: 1.0,
             tailOffsetZ: 0.48,
@@ -96,11 +118,7 @@
             separationDist: 15,
             separationForce: 0.05,
             // ---- Bat echolocation (forward-sensing reciprocal avoidance) ----
-            // Unlike the omni-directional separation term above (which only kicks
-            // in once rays are already close), this simulates a forward-facing
-            // detection cone: rays "see" neighbours ahead and steer around them.
             enableBatEcholocation: true,
-            // Half-angle of the detection cone, in radians. PI/3 = 60 deg full cone.
             echolocationConeAngle: Math.PI / 3,
             echolocationRange: 30,
             echolocationStrength: 0.08,
@@ -113,14 +131,12 @@
             sunIntensity: 0.8,
             rimIntensity: 1.5,
             fogNear: 40,
-            fogFar: 370, // grid sits at y = -100; fogFar 370 keeps it clearly visible when zoomed in
+            fogFar: 370,
             showGrid: true,
             preset: 'Dark'
         };
 
-        // Single source of truth for environment presets. applyPreset() reads from
-        // here instead of hardcoding a second copy, so the initial envSettings can
-        // never drift out of sync with the Dark preset branch.
+        // Single source of truth for environment presets.
         const PRESETS = {
             Dark: {
                 background: '#000810',
@@ -147,45 +163,61 @@
         };
 
         // ============================================================
-        // Scratch objects reused every frame to avoid per-frame
-        // allocations (GC pressure). Shared across Stingray instances is
-        // safe because update() is called sequentially (no reentrancy).
-        // If the update loop ever becomes parallel (worker / async),
-        // move these into per-instance fields instead.
+        // Scratch objects reused every frame to avoid per-frame allocations.
+        // Shared across Stingray instances is safe because update() runs
+        // sequentially (no reentrancy).
         // ============================================================
         const _sepVec     = new THREE.Vector3();
         const _diff       = new THREE.Vector3();
         const _lookTarget = new THREE.Vector3();
         const _dummy      = new THREE.Object3D();
 
-        // Scratch vectors for bat echolocation. Kept separate from the ones above
-        // so the detection loop can never clobber _lookTarget, which bounds /
-        // orientation still rely on in the same update() call.
+        // Scratch vectors for bat echolocation — separate from the ones above so
+        // the detection loop can never clobber _lookTarget (bounds/orientation
+        // still rely on it in the same update()).
         const _forward    = new THREE.Vector3();
         const _cross      = new THREE.Vector3();
         const _avoidDir   = new THREE.Vector3();
         const _diffDir    = new THREE.Vector3();
 
-        // Shared geometry — size is constant across all rays, so allocate once
-        // instead of per-instance. Saves GPU memory and makes rebuild disposal
-        // simpler (only the per-instance body geometry must be freed).
+        // [FIX 1] Shared EYE geometry only — eyes are never mutated, so one
+        // SphereGeometry is safe and saves VRAM. The TAIL geometry is NOT shared:
+        // every ray animates its own tail vertices each frame, so a shared buffer
+        // made all tails move in lock-step (the ref1 bug). Each Stingray builds
+        // its own tail geometry in initMesh().
         const SHARED_EYE_GEO = new THREE.SphereGeometry(0.12, 16, 16);
-        const SHARED_TAIL_GEO = new THREE.ConeGeometry(0.06, 4.0, 8, 12);
-        SHARED_TAIL_GEO.translate(0, (4.0 / 2 + 1.8), 0);
 
+        // Tail dimensions (identical for every instance; only the geometry buffer
+        // is per-instance now).
+        const TAIL_ROOT_RADIUS = 0.06;
+        const TAIL_LENGTH = 4.0;
+        const TAIL_RADIAL_SEGMENTS = 8;
+        const TAIL_HEIGHT_SEGMENTS = 12;
+
+        // Distinct debug-cone colours so each ray's detection volume is tellable
+        // apart. Purely cosmetic — the detection maths never reads these.
+        const ECHO_CONE_COLORS = [
+            0x00ff88, 0xff5a5a, 0x5aa0ff, 0xffd23f,
+            0xc56bff, 0x00e5e5, 0xff8c42, 0x9dff3f
+        ];
+
+        // ============================================================
+        // Global state
+        // ============================================================
         let scene, camera, renderer, composer, bloomPass, rayInstances = [];
         let ambientLight, sunLight, rimLight, gridHelper;
-        let sharedMaterial, eyeMaterial, tailMaterial; 
+        let sharedMaterial, eyeMaterial, tailMaterial;
         let isPaused = false;
         let pointerPos = { x: 0, y: 0 };
         let orbitRotation = { x: 0.2, y: 0 };
-        let zoom = 110; 
+        let zoom = 110;
         let lastTimestamp = 0;
         let gui;
         let pauseController = null;
+        let raySerial = 0; // monotonic index driving per-ray cone colour
 
-        // live camera/fog controls bound to lil-gui (kept in sync with the
-        // real `zoom` / `orbitRotation` / `scene.fog` values via onChange)
+        // live camera/fog controls bound to lil-gui (kept in sync with the real
+        // `zoom` / `orbitRotation` / `scene.fog` values via onChange)
         const viewSettings = {
             orbitX: orbitRotation.x,
             orbitY: orbitRotation.y,
@@ -197,9 +229,7 @@
         let initialPinchDist = 0;
         let initialZoom = 0;
 
-        // Throttle GUI refresh to at most once per animation frame — updateCamera()
-        // is called on every pointermove (60–120x/s) while dragging, and lil-gui's
-        // controllersRecursive().updateDisplay() touches the DOM per controller.
+        // Throttle GUI refresh to at most once per animation frame.
         let _guiSyncScheduled = false;
         function scheduleGuiSync() {
             if (_guiSyncScheduled || !gui) return;
@@ -227,9 +257,9 @@
             const textColor = brightness > 140 ? brandBlue : '#ffffff';
 
             ctx.fillStyle = color; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = brandOrange; ctx.fillRect(0, 0, 2048, 60); 
+            ctx.fillStyle = brandOrange; ctx.fillRect(0, 0, 2048, 60);
             ctx.fillStyle = brandBlue; ctx.fillRect(0, 964, 2048, 60);
-            
+
             const drawLogoSet = (offsetX, isMirror = false) => {
                 ctx.save();
                 ctx.translate(offsetX + 512, 512);
@@ -245,22 +275,23 @@
                 ctx.fillText("IRPC", 0, 178);
                 ctx.restore();
             };
-            drawLogoSet(0, false); drawLogoSet(1024, true); 
+            drawLogoSet(0, false); drawLogoSet(1024, true);
             const texture = new THREE.CanvasTexture(canvas);
             texture.needsUpdate = true;
             return texture;
         }
 
         class Stingray {
-            constructor() {
+            constructor(index) {
+                this.index = (index === undefined) ? raySerial++ : index;
                 this.group = new THREE.Group();
                 this.animTime = Math.random() * 100;
-                
+
                 const rand = Math.random();
                 let scale;
-                if (rand > 0.92) scale = 4.5 + Math.random() * 2.0; 
-                else if (rand > 0.75) scale = 2.5 + Math.random() * 1.5; 
-                else scale = 0.8 + Math.random() * 0.8; 
+                if (rand > 0.92) scale = 4.5 + Math.random() * 2.0;
+                else if (rand > 0.75) scale = 2.5 + Math.random() * 1.5;
+                else scale = 0.8 + Math.random() * 0.8;
 
                 this.group.scale.set(scale, scale, scale);
                 this.radius = scale * 2.5;
@@ -268,15 +299,15 @@
                 const baseSpeed = config.minSpeed + Math.random() * (config.maxSpeed - config.minSpeed);
                 this.moveSpeed = scale > 3 ? baseSpeed * 0.5 : baseSpeed;
 
-                // Spawn inside the bounds volume so rays don't get pushed back on
-                // the very first frame. Uses 0.7 * bounds on x/z as a safe margin.
+                // Spawn inside the bounds volume so rays aren't pushed back on the
+                // first frame. 0.7 * bounds on x/z is a safe margin.
                 const spawn = config.bounds * 0.7;
                 const angle = Math.random() * Math.PI * 2;
                 this.direction = new THREE.Vector3(Math.cos(angle), (Math.random()-0.5)*0.1, Math.sin(angle)).normalize();
                 this.targetDirection = this.direction.clone();
                 this.group.position.set((Math.random()-0.5)*2*spawn, (Math.random()-0.5)*50, (Math.random()-0.5)*2*spawn);
                 this.changeTargetTime = 0;
-                this.currentRoll = 0; 
+                this.currentRoll = 0;
                 this.echoCone = null;
                 this.initMesh();
                 scene.add(this.group);
@@ -284,18 +315,18 @@
 
             initMesh() {
                 const shape = new THREE.Shape();
-                shape.moveTo(0, -1.8); 
-                shape.bezierCurveTo(1.7, -1.6, 3.2, -0.8, 3.2, 0); 
-                shape.bezierCurveTo(3.2, 0.8, 1.4, 1.6, 0, 1.8); 
-                shape.bezierCurveTo(-1.4, 1.6, -3.2, 0.8, -3.2, 0); 
+                shape.moveTo(0, -1.8);
+                shape.bezierCurveTo(1.7, -1.6, 3.2, -0.8, 3.2, 0);
+                shape.bezierCurveTo(3.2, 0.8, 1.4, 1.6, 0, 1.8);
+                shape.bezierCurveTo(-1.4, 1.6, -3.2, 0.8, -3.2, 0);
                 shape.bezierCurveTo(-3.2, -0.8, -1.7, -1.6, 0, -1.8);
 
-                const geometry = new THREE.ExtrudeGeometry(shape, { 
-                    depth: config.bodyDepth, 
-                    bevelEnabled: true, 
-                    bevelThickness: 0.15, 
-                    bevelSize: 0.3, 
-                    bevelSegments: 15 
+                const geometry = new THREE.ExtrudeGeometry(shape, {
+                    depth: config.bodyDepth,
+                    bevelEnabled: true,
+                    bevelThickness: 0.15,
+                    bevelSize: 0.3,
+                    bevelSegments: 15
                 });
 
                 const pos = geometry.attributes.position;
@@ -305,10 +336,10 @@
                     const x = pos.getX(i);
                     const y = pos.getY(i);
                     const z = pos.getZ(i);
-                    
-                    const distFromCenter = Math.abs(x) / 3.2; 
+
+                    const distFromCenter = Math.abs(x) / 3.2;
                     const taperFactor = THREE.MathUtils.lerp(1.0, config.wingTaper, distFromCenter);
-                    
+
                     const centeredZ = z - (config.bodyDepth / 2);
                     pos.setZ(i, (centeredZ * taperFactor) + (config.bodyDepth / 2));
 
@@ -320,18 +351,18 @@
                         uvs.setXY(i, 0.5, (z > config.bodyDepth / 2) ? 0.03 : 0.97);
                     }
                 }
-                
+
                 this.initialPositions = new Float32Array(pos.array);
                 this.mesh = new THREE.Mesh(geometry, sharedMaterial);
-                this.mesh.rotation.x = -Math.PI / 2; 
+                this.mesh.rotation.x = -Math.PI / 2;
                 this.group.add(this.mesh);
 
-                this.eyeL = new THREE.Mesh(SHARED_EYE_GEO, eyeMaterial); 
+                this.eyeL = new THREE.Mesh(SHARED_EYE_GEO, eyeMaterial);
                 this.eyeR = new THREE.Mesh(SHARED_EYE_GEO, eyeMaterial);
-                
+
                 const eyeDistFromCenter = config.eyeX / 3.2;
                 const eyeTaperFactor = THREE.MathUtils.lerp(1.0, config.wingTaper, eyeDistFromCenter);
-                this.eyeZPos = (config.bodyDepth / 2) * eyeTaperFactor; 
+                this.eyeZPos = (config.bodyDepth / 2) * eyeTaperFactor;
 
                 this.mesh.add(this.eyeL, this.eyeR);
 
@@ -341,35 +372,40 @@
                 const surfaceZ_local = (config.bodyDepth / 2) + this.eyeZPos;
                 const bodyBackZ_local = (Math.abs(bb.min.z - surfaceZ_local) > Math.abs(bb.max.z - surfaceZ_local)) ? bb.min.z : bb.max.z;
 
-                this.tailLen = 4.0;
-                this.tailInitPos = new Float32Array(SHARED_TAIL_GEO.attributes.position.array);
-                this.tailMesh = new THREE.Mesh(SHARED_TAIL_GEO, tailMaterial);
+                // [FIX 1] Per-instance tail geometry so each tail animates
+                // independently (ref1 shared one buffer → all tails in phase).
+                this.tailLen = TAIL_LENGTH;
+                this.tailGeo = new THREE.ConeGeometry(
+                    TAIL_ROOT_RADIUS, TAIL_LENGTH, TAIL_RADIAL_SEGMENTS, TAIL_HEIGHT_SEGMENTS
+                );
+                this.tailGeo.translate(0, (TAIL_LENGTH / 2 + 1.8), 0);
+                this.tailInitPos = new Float32Array(this.tailGeo.attributes.position.array);
+                this.tailMesh = new THREE.Mesh(this.tailGeo, tailMaterial);
                 this.mesh.add(this.tailMesh);
                 this.tailMesh.position.set(0, bodyCenterY_local, bodyBackZ_local + config.tailOffsetZ);
 
                 this.initEchoCone();
             }
 
-            // Debug visualization of the forward detection cone. It is attached to
-            // the mesh (not the group) so its local +Z lines up with the body's
-            // forward axis even though the mesh is rotated -90deg on X.
+            // [FIX 5] Debug cone: per-ray colour + emits from the HEAD (not the
+            // body centre). Attached to the mesh so its local axes match the
+            // body's forward (+Z) despite the -90° mesh rotation. Purely visual —
+            // the detection maths below still measures centre-to-centre.
             initEchoCone() {
                 const range = config.echolocationRange;
                 const radius = Math.tan(config.echolocationConeAngle) * range;
                 const geo = new THREE.ConeGeometry(radius, range, 24, 1, true);
+                const color = ECHO_CONE_COLORS[this.index % ECHO_CONE_COLORS.length];
                 const mat = new THREE.MeshBasicMaterial({
-                    color: 0x00ff88, transparent: true, opacity: 0.06,
+                    color: color, transparent: true, opacity: 0.06,
                     wireframe: true, depthWrite: false
                 });
                 this.echoCone = new THREE.Mesh(geo, mat);
-                // ConeGeometry points +Y by default and is centered at origin, with
-                // its tip toward +Y and base toward -Y. Rotate so the tip points -Z
-                // (the body's local forward is +Z after translateZ; the detection
-                // logic treats +Z as forward, so we point the cone the same way).
                 this.echoCone.rotation.x = -Math.PI / 2;
                 this.echoCone.rotation.z = Math.PI;
-                // Push it so the tip sits at the body and it opens forward.
-                this.echoCone.position.set(0, 0, range / 2);
+                // Emit from the head: the diamond's leading tip is local +Z = 1.8.
+                const HEAD_Z = 1.8;
+                this.echoCone.position.set(0, 0, HEAD_Z + range / 2);
                 this.echoCone.visible = config.showEchoCones;
                 this.mesh.add(this.echoCone);
             }
@@ -380,18 +416,9 @@
 
             /**
              * Flap wave Z-offset for a given local (x, y) on the wing surface.
-             *
-             * NOTE: This is a pure function of |x| (absolute value). That is why
-             * the left eye (-eyeX) and right eye (+eyeX) always receive the SAME
-             * wave value and therefore stay visually mirrored.
-             *
-             * In update() the two eyes are evaluated with TWO SEPARATE calls
-             * (getFlapWave(-eyeX) and getFlapWave(+eyeX)) rather than computing
-             * one value and sharing it. This is a deliberate future-proofing
-             * choice: if this formula ever depends on the SIGNED x (e.g. an
-             * asymmetric wing tilt), a collapsed single-call version would
-             * silently break the mirror symmetry. The extra sin() cost is
-             * negligible next to the O(n^2) separation loop.
+             * Pure function of |x| so the left/right eyes stay visually mirrored.
+             * update() still evaluates the two eyes with separate calls so a
+             * future signed-x change can't silently break mirror symmetry.
              */
             getFlapWave(x, y, t) {
                 const d = Math.abs(x);
@@ -406,17 +433,13 @@
 
                 if (t > this.changeTargetTime) {
                     // Wander relative to the CURRENT heading (targetDirection),
-                    // not the constructor-time direction. this.direction is kept in
-                    // sync below, but targetDirection already reflects steering.
+                    // not the constructor-time direction, so steering is respected.
                     const angle = Math.atan2(this.targetDirection.x, this.targetDirection.z) + (Math.random()-0.5)*Math.PI*0.5;
                     this.targetDirection.set(Math.sin(angle), (Math.random()-0.5)*0.2, Math.cos(angle)).normalize();
                     this.changeTargetTime = t + 10 + Math.random()*20;
                 }
 
                 // ---- Separation (omni-directional, close-range fallback) ----
-                // Still runs so rays never physically overlap once they are already
-                // touching; the echolocation pass below is the earlier, forward-only
-                // "see it coming" layer.
                 _sepVec.set(0, 0, 0);
                 let count = 0;
                 const myPos = this.group.position;
@@ -434,10 +457,6 @@
                     }
                 }
                 if (count > 0) {
-                    // NOTE: targetDirection is normalized right after adding the
-                    // separation vector, so `separationForce` acts as a steering
-                    // blend factor (how strongly separation skews the heading),
-                    // not as an independent physical force magnitude.
                     _sepVec.divideScalar(count);
                     this.targetDirection.add(_sepVec.multiplyScalar(config.separationForce)).normalize();
                 }
@@ -457,22 +476,21 @@
                 _lookTarget.copy(myPos).add(this.targetDirection);
                 _dummy.lookAt(_lookTarget);
                 this.group.quaternion.rotateTowards(_dummy.quaternion, config.turnSpeed);
-                
+
                 let turnDiff = this.group.rotation.y - lastY;
                 if (turnDiff > Math.PI) turnDiff -= Math.PI*2; if (turnDiff < -Math.PI) turnDiff += Math.PI*2;
-                // Frame-rate independent smoothing: matches the old fixed lerp(0.05)
-                // at 60fps while staying stable at other refresh rates.
+                // Frame-rate independent smoothing: matches the old fixed
+                // lerp(0.05) at 60fps while staying stable at other refresh rates.
                 const rollK = 1 - Math.pow(0.95, delta / 16.67);
                 this.currentRoll = THREE.MathUtils.lerp(this.currentRoll, -turnDiff*30, rollK);
-                this.mesh.rotation.y = this.currentRoll; 
+                this.mesh.rotation.y = this.currentRoll;
 
-                // Keep this.direction in sync with the actual heading, so any
-                // logic that reads it (now or later) sees the live direction.
+                // Keep this.direction in sync with the actual heading.
                 this.direction.copy(this.targetDirection);
 
-                // Speed is per-second, not per-frame: base moveSpeed (~0.12–0.2)
-                // was tuned for 60fps, so multiply by delta * 0.06 to stay identical
-                // at 60fps while scaling correctly at other frame rates.
+                // Speed is per-second: base moveSpeed (~0.12–0.2) was tuned for
+                // 60fps, so multiply by delta * 0.06 to stay identical at 60fps
+                // while scaling correctly at other frame rates.
                 this.group.translateZ(this.moveSpeed * delta * 0.06);
 
                 // ---- Wing flap (skip vertex upload when flap is effectively off) ----
@@ -486,14 +504,13 @@
                         posAttr.setZ(i, pz + wave);
                     }
                     posAttr.needsUpdate = true;
-                    // NOTE: vertex normals are NOT recomputed every frame — that is
-                    // very expensive. Lighting therefore does not track the wing
-                    // fold; acceptable for this stylized look.
+                    // Vertex normals are NOT recomputed every frame (expensive).
+                    // Lighting therefore doesn't track the wing fold — acceptable
+                    // for this stylized look.
                 }
-                
+
                 // ---- Eyes ----
-                // Two explicit calls (mirror symmetry). See getFlapWave docstring:
-                // keep -eyeX and +eyeX as separate evaluations.
+                // Two explicit calls (mirror symmetry). See getFlapWave docstring.
                 const surfaceZ = (config.bodyDepth / 2) + this.eyeZPos;
                 this.eyeL.position.set(
                     -config.eyeX, -config.eyeY,
@@ -503,10 +520,9 @@
                      config.eyeX, -config.eyeY,
                     surfaceZ + config.eyeHover + this.getFlapWave( config.eyeX, -config.eyeY, t)
                 );
-                
-                // ---- Tail ----
-                // NOTE: tail wave uses `t` (already scaled by timeScale); timeScale is
-                // intentionally NOT multiplied again here.
+
+                // ---- Tail (per-instance geometry, so waves are independent) ----
+                // Uses `t` (already scaled by timeScale); not multiplied again here.
                 if (this.tailMesh && this.tailInitPos && config.flapStrength > 0.001) {
                     const tailAttr = this.tailMesh.geometry.attributes.position;
                     for (let vi = 0; vi < tailAttr.count; vi++) {
@@ -522,32 +538,18 @@
 
             /**
              * Forward-sensing reciprocal avoidance, modelled on bat echolocation.
+             * For each neighbour inside a forward-facing cone: check range, check
+             * cone angle, decide side (cross product), then steer to the OPPOSITE
+             * side (reciprocal) so two rays meeting head-on dodge apart.
+             * Urgency scales quadratically with proximity.
              *
-             * For each neighbour inside a forward-facing cone:
-             *   1. Check it is within `echolocationRange`.
-             *   2. Check it lies within `echolocationConeAngle` of the forward axis.
-             *   3. Decide which side it is on (cross product vs forward).
-             *   4. Steer to the OPPOSITE side (reciprocal rule), so two rays meeting
-             *      head-on dodge in opposite directions instead of the same way.
-             * Urgency scales with 1 - dist/range (quadratic), so far rays barely
-             * react and near ones swerve hard.
-             *
-             * All maths uses preallocated scratch vectors — no allocation per ray,
-             * no clobbering of _lookTarget (bounds/orientation still need it).
-             *
-             * Side convention: the body's forward is local +Z (translateZ moves it
-             * toward +Z). A neighbour is "to the right" when (forward x toOther).y
-             * is NEGATIVE in a right-handed Y-up frame; we then steer LEFT (+1),
-             * and vice versa. Written so the intent is readable even if the sign
-             * convention ever flips.
+             * Side convention: body forward is local +Z. (forward x toOther).y > 0
+             * means neighbour is LEFT in a Y-up right-handed frame → steer RIGHT.
              */
             applyEcholocation(allRays, myPos) {
-                // Forward axis in world space. (0,0,1) matches the +Z the body moves
-                // along after the -90deg mesh rotation is accounted for by the group
-                // quaternion.
                 _forward.set(0, 0, 1).applyQuaternion(this.group.quaternion).normalize();
                 const cosLimit = Math.cos(config.echolocationConeAngle);
-                let steerX = 0, steerZ = 0;   // accumulated steering (planar)
+                let steerX = 0, steerZ = 0;
 
                 for (let i = 0; i < allRays.length; i++) {
                     const other = allRays[i];
@@ -561,23 +563,16 @@
                     const cosAngle = _forward.dot(_diffDir);      // within cone?
                     if (cosAngle < cosLimit) continue;
 
-                    // Which side is the neighbour on? cross(forward, toOther).y
                     _cross.crossVectors(_forward, _diffDir);
-                    // Guard against a near-coplanar case (cross.y ~ 0, e.g. exactly
-                    // ahead): fall back to a stable deterministic side so two rays in
-                    // the same situation don't jitter. Tie-break using the x offset.
                     let side;
                     if (Math.abs(_cross.y) < 1e-4) {
+                        // Dead ahead — deterministic tie-break from x offset.
                         side = (other.group.position.x >= myPos.x) ? -1 : 1;
                     } else {
-                        // cross.y > 0  => neighbour is to the LEFT in Y-up right-handed
-                        // => steer RIGHT (+1). cross.y < 0 => steer LEFT (-1).
                         side = (_cross.y > 0) ? 1 : -1;
                     }
 
-                    // Perpendicular to the line-of-sight, in the XZ plane. Rotating
-                    // the horizontal part of toOther by 90deg gives a stable dodge
-                    // direction regardless of pitch.
+                    // Perpendicular to line-of-sight in the XZ plane.
                     _avoidDir.set(-_diffDir.z, 0, _diffDir.x);
                     if (_avoidDir.lengthSq() < 1e-6) continue;
                     _avoidDir.normalize().multiplyScalar(side);
@@ -608,7 +603,7 @@
             const gridColor = (preset === 'Dark') ? 0x00ffff : 0x004488;
             gridHelper = new THREE.GridHelper(500, 50, gridColor, gridColor);
             gridHelper.position.y = -100;
-            if(envSettings.showGrid) scene.add(gridHelper);
+            if (envSettings.showGrid) scene.add(gridHelper);
         }
 
         function applyPreset(v) {
@@ -651,25 +646,26 @@
         }
 
         // Dispose the per-instance GPU resources of a ray before dropping it.
-        // Shared geometries/materials (SHARED_EYE_GEO, SHARED_TAIL_GEO,
-        // sharedMaterial, eyeMaterial, tailMaterial) are NOT disposed here.
+        // Shared geometry/materials (SHARED_EYE_GEO, sharedMaterial, eyeMaterial,
+        // tailMaterial) are NOT disposed here.
         function disposeRay(r) {
             scene.remove(r.group);
             if (r.mesh && r.mesh.geometry) r.mesh.geometry.dispose();
-            // The debug echo cone is per-instance, so its geometry/material must
-            // be disposed here (unlike the shared eye/tail geometries below).
+            // [FIX 1] Tail geometry is per-instance now → dispose it.
+            if (r.tailGeo) r.tailGeo.dispose();
+            // The debug echo cone is per-instance → dispose it.
             if (r.echoCone) {
                 r.echoCone.geometry.dispose();
                 r.echoCone.material.dispose();
             }
-            // r.eyeL/eyeR use SHARED_EYE_GEO, r.tailMesh uses SHARED_TAIL_GEO
-            // → do NOT dispose those shared geometries.
+            // r.eyeL/eyeR use SHARED_EYE_GEO → do NOT dispose that.
         }
 
         function rebuildRays() {
             rayInstances.forEach(disposeRay);
             rayInstances = [];
-            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+            raySerial = 0; // re-index colours from 0 after a rebuild
+            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray(i));
         }
 
         function setPauseLabel() {
@@ -679,11 +675,11 @@
         function initGUI() {
             if (gui) gui.destroy();
             gui = new lil.GUI({ title: 'Polimaxx Stingray Swarm' });
-            
+
             const envFolder = gui.addFolder('Environment Settings');
             envFolder.add(envSettings, 'preset', ['Dark', 'Daylight']).name('Mode Preset').onChange(applyPreset);
 
-            // ---- Camera & Fog (live) ----
+            // ---- Camera & Fog (live, two-way synced) ----
             const camFolder = gui.addFolder('Camera & Fog');
             camFolder.add(viewSettings, 'orbitX', -Math.PI/2 + 0.1, Math.PI/2 - 0.1, 0.01)
                 .name('Camera Pitch')
@@ -728,15 +724,13 @@
             });
 
             const bodyFolder = gui.addFolder('Body Structure');
-            // onFinishChange (not onChange) so the swarm is rebuilt once per drag
-            // release, not on every slider tick.
+            // onFinishChange so the swarm is rebuilt once per drag release.
             bodyFolder.add(config, 'bodyDepth', 0.1, 1.0).name('Center Thickness').onFinishChange(rebuildRays);
             bodyFolder.add(config, 'wingTaper', 0.05, 1.0).name('Wing Taper (Slope)').onFinishChange(rebuildRays);
 
             const colorFolder = gui.addFolder('Stingray Appearance');
-            // onFinishChange: dragging the picker fires onChange on every tick, and
-            // each call repaints a 2048×1024 canvas + re-uploads the texture. Fire
-            // once when the drag ends instead.
+            // onFinishChange: dragging the picker fires onChange per tick, and each
+            // call repaints a 2048×1024 canvas + re-uploads the texture.
             colorFolder.addColor(config, 'baseColor').name('Body Color').onFinishChange(v => {
                 sharedMaterial.map.dispose(); sharedMaterial.map = createPolimaxxTexture(v);
             });
@@ -745,7 +739,7 @@
             });
 
             gui.add(config, 'timeScale', 0, 2, 0.01).name('Playback Speed');
-            const pauseControl = { togglePause: () => { isPaused = !isPaused; setPauseLabel(); scheduleGuiSync(); } };
+            const pauseControl = { togglePause: () => { togglePause(); } };
             pauseController = gui.add(pauseControl, 'togglePause').name(isPaused ? 'Resume (Space)' : 'Pause (Space)');
 
             gui.close();
@@ -780,7 +774,7 @@
             rimLight = new THREE.DirectionalLight(0xffffff, envSettings.rimIntensity);
             rimLight.position.set(-50, -50, -50); scene.add(rimLight);
 
-            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray());
+            for (let i = 0; i < config.count; i++) rayInstances.push(new Stingray(i));
 
             updateCamera();
             setupInteractions();
@@ -788,17 +782,23 @@
             setupExternalToggle();
             window.addEventListener('keydown', (e) => {
                 if (e.code !== 'Space') return;
-                // Don't hijack Space while typing into a lil-gui field, or when
-                // focus is anywhere inside the GUI panel.
+                // Don't hijack Space while typing into a lil-gui field.
                 if (e.target && e.target.closest && e.target.closest('.lil-gui')) return;
                 if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-                isPaused = !isPaused;
-                setPauseLabel();
-                scheduleGuiSync();
+                togglePause();
                 e.preventDefault();
             });
             window.addEventListener('resize', onResize);
             requestAnimationFrame(animate);
+        }
+
+        // [FIX 3] Pause toggle resets the frame clock so resuming never feeds a
+        // huge first delta (which would warp every ray forward at once).
+        function togglePause() {
+            isPaused = !isPaused;
+            lastTimestamp = 0; // next frame computes delta = 0 → no jump
+            setPauseLabel();
+            scheduleGuiSync();
         }
 
         function setupExternalToggle() {
@@ -813,20 +813,19 @@
             const touches = new Map();
 
             el.addEventListener('pointerdown', e => {
-                if(e.target.closest('.lil-gui') || e.target.closest('#mode-toggle')) return; 
-                // Only primary button (left) drives rotation; ignore right/middle so
-                // the browser context menu / middle-scroll isn't fought over.
+                if(e.target.closest('.lil-gui') || e.target.closest('#mode-toggle')) return;
+                // Only primary button (left) drives rotation.
                 if (e.button !== undefined && e.button !== 0) return;
-                
+
                 touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
                 pointerPos = { x: e.clientX, y: e.clientY };
-                
+
                 if (touches.size === 2) {
                     const pts = Array.from(touches.values());
                     initialPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
                     initialZoom = zoom;
                 }
-                
+
                 el.setPointerCapture(e.pointerId);
             });
 
@@ -845,15 +844,15 @@
                     const diff = initialPinchDist - currentDist;
                     zoom = THREE.MathUtils.clamp(initialZoom + diff * 0.5, 30, 600);
                 }
-                
+
                 updateCamera();
             });
 
             const endPointer = (e) => {
                 touches.delete(e.pointerId);
                 if (touches.size < 2) initialPinchDist = 0;
-                // If one finger of a pinch lifts, re-seed pointerPos to the remaining
-                // finger so the next drag doesn't jump by the stale gap.
+                // [FIX 4] If one finger of a pinch lifts, re-seed pointerPos to the
+                // remaining finger so the next drag doesn't jump by the stale gap.
                 if (touches.size === 1) {
                     const remaining = Array.from(touches.values())[0];
                     pointerPos = { x: remaining.x, y: remaining.y };
@@ -863,7 +862,7 @@
             window.addEventListener('pointerup', endPointer);
             window.addEventListener('pointercancel', endPointer);
 
-            // Suppress the browser context menu so right-drag can't leave a menu open.
+            // Suppress the browser context menu so right-drag can't leave it open.
             el.addEventListener('contextmenu', e => e.preventDefault());
 
             el.addEventListener('wheel', e => {
@@ -879,7 +878,7 @@
                 zoom * Math.cos(orbitRotation.y) * Math.cos(orbitRotation.x)
             );
             camera.lookAt(0, 0, 0);
-            // keep GUI sliders in sync when the view is changed by drag/pinch/scroll
+            // keep GUI sliders in sync when the view changes by drag/pinch/scroll
             viewSettings.orbitX = orbitRotation.x;
             viewSettings.orbitY = orbitRotation.y;
             viewSettings.zoom = zoom;
@@ -888,14 +887,35 @@
 
         function onResize() {
             camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight); 
+            renderer.setSize(window.innerWidth, window.innerHeight);
             composer.setSize(window.innerWidth, window.innerHeight);
         }
 
+        // [FIX 2 - CORRECTED] Hitch guard & delta capping.
+        //   - A SEVERE stall (tab switch, shader compile, GPU reset — anything
+        //     over ~200ms) is a hitch: skip the frame (delta = 0) so rays never
+        //     warp forward trying to catch up.
+        //   - A mildly slow frame is CAPPED at 50ms (~20 FPS floor): motion stays
+        //     smooth but never overshoots. Normal 30–60 FPS frames (25–33ms for
+        //     low-end/mobile hardware) pass through UNTOUCHED, so the animation
+        //     no longer stutters just because the device runs at ~30 FPS.
+        //   (The previous version used 33ms as the hitch threshold, which both
+        //    wrongly froze 30 FPS frames AND made the 50ms cap dead code — since
+        //    anything > 50 is already > 33 and became 0. Fixed here.)
+        const HITCH_FRAME_MS = 200;
+        const MAX_DELTA_MS = 50;
+
         function animate(timestamp) {
             requestAnimationFrame(animate);
-            const delta = timestamp - (lastTimestamp || timestamp);
+            let delta = timestamp - (lastTimestamp || timestamp);
             lastTimestamp = timestamp;
+
+            if (delta > HITCH_FRAME_MS) {
+                delta = 0;                    // severe stall → skip, no catch-up
+            } else {
+                delta = Math.min(delta, MAX_DELTA_MS); // cap slow frames
+            }
+
             if (!isPaused) rayInstances.forEach(ray => ray.update(delta, rayInstances));
             composer.render();
         }
